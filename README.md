@@ -6,7 +6,7 @@ CLI pour la détection et l'analyse d'expansions de répétitions courtes (STR)
 ## Installation
 
 ```bash
-git clone https://github.com/<toi>/str-expansion-toolkit.git
+git clone https://github.com/qbrandao/str-expansion-toolkit.git
 cd str-expansion-toolkit
 pip install -e .
 ```
