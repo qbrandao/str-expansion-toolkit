@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "str-expansion-toolkit"
+version = "0.1.0"
+description = "Détection, comparaison et rapport d'expansions de répétitions courtes (STR) à partir de VAMOS, TRGT et tandem-genotypes."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Brandao Quentin", email = "quentin.brandao@aphp.fr" }
+]
+dependencies = [
+    "pysam>=0.22",
+    "pandas>=2.0",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+str-toolkit = "str_toolkit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
