@@ -1,7 +1,7 @@
 import pysam
 import pytest
 
-from str_toolkit.merge import _merge_overlapping_tg_rows, _split_two_alleles, parse_tandem_genotypes, parse_trgt
+from str_toolkit.merge import _merge_overlapping_tg_rows, _split_two_alleles, parse_longtr, parse_tandem_genotypes, parse_trgt
 
 TG_SAMPLE_LINES = [
     "chr1\t231799889\t231799934\tTCCCTTCCTCCCTTCC\t2.8\t.\t259,267,269,271,272,318,318,319\t.\n",
@@ -79,3 +79,37 @@ def test_parse_trgt_reads_motifs_and_al(tmp_path):
     assert {c.source for c in calls} == {"trgt_allele1", "trgt_allele2"}
     assert all(c.motif == "AAAG" for c in calls)
     assert sorted(c.size for c in calls) == [40.0, 55.0]
+
+
+def _write_longtr_vcf(path):
+    header = pysam.VariantHeader()
+    header.add_line('##INFO=<ID=MOTIF,Number=1,Type=String,Description="motif">')
+    header.add_line('##INFO=<ID=END,Number=1,Type=Integer,Description="end">')
+    header.add_line('##FORMAT=<ID=GB,Number=.,Type=Integer,Description="bp diff vs reference">')
+    header.add_line('##contig=<ID=chr1,length=248956422>')
+    header.add_sample("sample01")
+    with pysam.VariantFile(str(path), "w", header=header) as vf:
+        record = vf.new_record(
+            contig="chr1", start=999, stop=1040,
+            alleles=("N", "<STR>"),
+            info={"MOTIF": "AAAG", "END": 1040},
+        )
+        record.samples["sample01"]["GB"] = (0, 12)
+        vf.write(record)
+
+
+def test_parse_longtr_reads_motif_and_gb(tmp_path):
+    vcf_path = tmp_path / "sample.longtr.vcf.gz"
+    uncompressed = tmp_path / "sample.longtr.vcf"
+    _write_longtr_vcf(uncompressed)
+    pysam.tabix_compress(str(uncompressed), str(vcf_path))
+
+    calls = parse_longtr(vcf_path)
+    assert len(calls) == 2
+    assert {c.source for c in calls} == {"longtr_allele1", "longtr_allele2"}
+    assert all(c.motif == "AAAG" for c in calls)
+    assert sorted(c.size for c in calls) == [0.0, 12.0]
+
+
+def test_parse_longtr_missing_file_returns_empty(tmp_path):
+    assert parse_longtr(tmp_path / "does_not_exist.vcf.gz") == []

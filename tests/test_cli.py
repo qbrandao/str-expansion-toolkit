@@ -23,7 +23,23 @@ def test_detect_single_sample_parses():
         ]
     )
     assert args.sample == "p01"
-    assert args.tools == ["vamos", "trgt", "tandem-genotypes"]
+    assert args.tools == ["vamos", "tandem-genotypes", "longtr"]
+
+
+def test_detect_trgt_available_as_explicit_opt_in():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "detect",
+            "--sample", "p01",
+            "--bam", "p01.bam",
+            "--fastq", "p01.fastq.gz",
+            "--config", "config.yaml",
+            "-o", "out/",
+            "--tools", "vamos", "trgt", "tandem-genotypes", "longtr",
+        ]
+    )
+    assert "trgt" in args.tools
 
 
 def test_compare_parses():

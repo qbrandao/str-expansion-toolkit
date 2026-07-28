@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
-    { name = "Brandao Quentin", email = "quentin.brandao@aphp.fr" }
+    { name = "Ton Nom", email = "toi@exemple.org" }
 ]
 dependencies = [
     "pysam>=0.22",

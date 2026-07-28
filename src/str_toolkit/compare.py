@@ -26,7 +26,7 @@ from str_toolkit.annotate import annotate_locus, load_exons, load_genes
 
 logger = logging.getLogger(__name__)
 
-TOOLS = ("vamos", "trgt", "tandem-genotypes")
+TOOLS = ("vamos", "trgt", "tandem-genotypes", "longtr")
 
 OUTPUT_COLUMNS = (
     ["patient_id", "chrom", "pos", "motif", "gene", "feature"]

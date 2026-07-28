@@ -137,6 +137,51 @@ def parse_trgt(vcf_path: Path) -> list[STRCall]:
     return calls
 
 
+def parse_longtr(vcf_path: Path) -> list[STRCall]:
+    """
+    Lit le VCF produit par `LongTR` (--tr-vcf, bgzippé).
+
+    Champs utilisés (confirmés dans le README officiel gymrek-lab/LongTR) :
+    INFO/MOTIF (motif du locus), INFO/END, FORMAT/GB (différence en bp de
+    chaque allèle par rapport à la référence -- PAS une longueur absolue,
+    contrairement à TRGT/AL). Comme pour tandem-genotypes, cette valeur
+    reste cohérente en interne (comparaison max contrôle / diff patient
+    au sein du même outil) même si elle n'est pas directement comparable
+    aux longueurs absolues des autres outils.
+    """
+    vcf_path = Path(vcf_path)
+    if not vcf_path.exists():
+        return []
+    calls = []
+    with pysam.VariantFile(str(vcf_path)) as vf:
+        for record in vf:
+            motif_field = record.info.get("MOTIF")
+            if motif_field is None:
+                continue
+            motif = str(_first(motif_field)).split(",")[0]
+            end = record.info.get("END", record.stop)
+
+            for sample_name, sample_data in record.samples.items():
+                gb = sample_data.get("GB")  # bp diff vs référence par allèle, ex: (0, 12)
+                if gb is None:
+                    continue
+                for i, bp_diff in enumerate(gb):
+                    if bp_diff is None:
+                        continue
+                    calls.append(
+                        STRCall(
+                            chrom=record.chrom,
+                            start=record.pos,
+                            end=int(end) if end else record.pos,
+                            motif=motif,
+                            size=float(bp_diff),
+                            source=f"longtr_allele{i + 1}",
+                            raw={"sample": sample_name},
+                        )
+                    )
+    return calls
+
+
 def _split_two_alleles(values: list[float]) -> tuple[float, float]:
     """
     Sépare une liste de longueurs par read (bp) en 2 groupes (allèle court /
@@ -348,6 +393,8 @@ def merge_tool_outputs(sample_id: str, tool_outputs: dict[str, object], outdir: 
         calls += parse_trgt(tool_outputs["trgt"])
     if "tandem-genotypes" in tool_outputs:
         calls += parse_tandem_genotypes(tool_outputs["tandem-genotypes"])
+    if "longtr" in tool_outputs:
+        calls += parse_longtr(tool_outputs["longtr"])
 
     clusters = cluster_calls(calls, window=window)
     records = [build_locus_record(c) for c in clusters]
@@ -361,7 +408,7 @@ def merge_tool_outputs(sample_id: str, tool_outputs: dict[str, object], outdir: 
 # ---------------------------------------------------------------------
 
 # Correspondance source (ex: "vamos_hap1", "tandem_genotypes_allele2") -> outil
-_TOOL_FAMILY_NAMES = {"vamos": "vamos", "trgt": "trgt", "tandem_genotypes": "tandem-genotypes"}
+_TOOL_FAMILY_NAMES = {"vamos": "vamos", "trgt": "trgt", "tandem_genotypes": "tandem-genotypes", "longtr": "longtr"}
 
 
 def tool_family(source: str) -> str:

@@ -58,9 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_detect.add_argument(
         "--tools",
         nargs="+",
-        default=["vamos", "trgt", "tandem-genotypes"],
-        choices=["vamos", "trgt", "tandem-genotypes"],
-        help="Sous-ensemble d'outils à lancer (par défaut: les 3).",
+        default=["vamos", "tandem-genotypes", "longtr"],
+        choices=["vamos", "trgt", "tandem-genotypes", "longtr"],
+        help="Sous-ensemble d'outils à lancer (par défaut: vamos, tandem-genotypes, longtr -- "
+        "tous ONT-natifs. TRGT n'est PAS lancé par défaut : il n'a pas de support officiel "
+        "pour les données ONT (conçu pour PacBio HiFi), il ne tourne que si explicitement "
+        "demandé ici, ex. --tools vamos trgt tandem-genotypes longtr.",
     )
     p_detect.add_argument("--threads", type=int, default=4)
     p_detect.set_defaults(func=detect.run)

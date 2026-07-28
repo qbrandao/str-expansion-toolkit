@@ -132,28 +132,47 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int) -> dict[s
 
 
 # ---------------------------------------------------------------------
+# Alignement partagé (minimap2 ONT + tri + indexation), réutilisé par TRGT
+# et LongTR : les deux outils lisent un BAM/CRAM déjà aligné, inutile de
+# ré-aligner deux fois si les deux tournent dans le même run.
+# ---------------------------------------------------------------------
+
+def _ensure_ont_sorted_bam(sample: Sample, mmi: str, align_env: str, outdir: Path, threads: int, tool_label: str) -> Path:
+    sid = sample.sample_id
+    existing = sorted(glob.glob(str(outdir / f"{sid}*.sorted.bam")))
+    if existing:
+        return Path(existing[0])
+
+    fastq = _require(sample.fastq_path, sid, "fastq_path", tool_label)
+    sorted_bam = outdir / f"{sid}.sorted.bam"
+    logger.info("[%s] %s: minimap2 (map-ont) align + sort", sid, tool_label)
+    run_in_env(
+        align_env,  # doit fournir minimap2 + samtools
+        [],
+        shell_pipeline=(
+            f"minimap2 -t {threads} -ax map-ont -Y {mmi} {fastq} "
+            f"| samtools sort -@ {threads} -o {sorted_bam}"
+        ),
+    )
+    return sorted_bam
+
+
+# ---------------------------------------------------------------------
 # TRGT : minimap2 (align + sort) -> trgt genotype
+#
+# ATTENTION : TRGT est conçu pour des reads PacBio HiFi et n'a pas de
+# support officiel pour les données ONT (cf. Aliyev et al. 2026, bioRxiv,
+# qui exclut explicitement TRGT des benchmarks ONT pour cette raison). Ce
+# n'est donc PAS un outil par défaut de `detect` -- il ne tourne que si
+# explicitement demandé via `--tools ... trgt ...`. À documenter comme
+# usage hors cadre officiel dans toute publication utilisant ces résultats.
 # ---------------------------------------------------------------------
 
 def run_trgt(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
     sid = sample.sample_id
     ctrgt = cfg.trgt
 
-    existing = sorted(glob.glob(str(outdir / f"{sid}*.sorted.bam")))
-    if existing:
-        sorted_bam = Path(existing[0])
-    else:
-        fastq = _require(sample.fastq_path, sid, "fastq_path", "TRGT")
-        sorted_bam = outdir / f"{sid}.sorted.bam"
-        logger.info("[%s] TRGT: minimap2 align + sort", sid)
-        run_in_env(
-            ctrgt.env,
-            [],
-            shell_pipeline=(
-                f"minimap2 -t {threads} -ax lr:hq -Y -H {ctrgt.mmi} {fastq} "
-                f"| samtools sort -@ {threads} -o {sorted_bam}"
-            ),
-        )
+    sorted_bam = _ensure_ont_sorted_bam(sample, ctrgt.mmi, ctrgt.env, outdir, threads, "TRGT")
 
     bai = Path(f"{sorted_bam}.bai")
     if not bai.exists():
@@ -177,6 +196,49 @@ def run_trgt(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
         )
     else:
         logger.info("[%s] TRGT: %s déjà présent, skip", sid, out_vcf.name)
+
+    return out_vcf
+
+
+# ---------------------------------------------------------------------
+# LongTR : minimap2 (align + sort, partagé avec TRGT) -> LongTR
+#
+# Outil ONT-natif (HipSTR adapté aux reads longs, PacBio HiFi ET ONT).
+# Choisi comme 3e outil par défaut à la place de TRGT pour les données ONT
+# -- meilleure concordance avec les assemblages, mais nécessite des reads
+# de bonne qualité/profondeur suffisante (--min-reads=10 par défaut).
+# ---------------------------------------------------------------------
+
+def run_longtr(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
+    sid = sample.sample_id
+    clongtr = cfg.longtr
+
+    sorted_bam = _ensure_ont_sorted_bam(sample, clongtr.mmi, clongtr.env, outdir, threads, "LongTR")
+
+    bai = Path(f"{sorted_bam}.bai")
+    if not bai.exists():
+        logger.info("[%s] LongTR: indexation bam", sid)
+        run_in_env(clongtr.env, ["samtools", "index", "-@", str(threads), str(sorted_bam)])
+
+    out_vcf = outdir / f"{sid}.longtr.vcf.gz"
+    if not out_vcf.exists():
+        logger.info("[%s] LongTR: genotyping", sid)
+        # LongTR n'a pas de multi-threading natif ; --bam-samps/--bam-libs
+        # évite de dépendre de tags @RG corrects dans le BAM produit par minimap2.
+        run_in_env(
+            clongtr.env,
+            [
+                "LongTR",
+                "--bams", str(sorted_bam),
+                "--fasta", cfg.reference,
+                "--regions", clongtr.regions_bed,
+                "--tr-vcf", str(out_vcf),
+                "--bam-samps", sid,
+                "--bam-libs", f"{sid}_lib",
+            ],
+        )
+    else:
+        logger.info("[%s] LongTR: %s déjà présent, skip", sid, out_vcf.name)
 
     return out_vcf
 
@@ -229,6 +291,7 @@ TOOL_RUNNERS = {
     "vamos": run_vamos,
     "trgt": run_trgt,
     "tandem-genotypes": run_tandem_genotypes,
+    "longtr": run_longtr,
 }
 
 

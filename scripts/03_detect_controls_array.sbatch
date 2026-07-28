@@ -1,0 +1,40 @@
+#!/bin/bash
+#SBATCH --job-name=str-detect-controls
+#SBATCH --output=logs/%x_%A_%a.out
+#SBATCH --error=logs/%x_%A_%a.err
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=24:00:00
+#SBATCH --partition=<ta_partition>
+#SBATCH --array=1-N%4
+# ^ Remplace N par le nombre de lignes de controls.tsv (hors en-tête) :
+#     tail -n +2 controls.tsv | wc -l
+#   %4 limite à 4 jobs simultanés -- ajuste selon les ressources dispo sur
+#   ta partition (chaque tâche utilise déjà 16 CPU / 64G).
+
+# Un job array : chaque tâche traite UNE ligne du TSV (sample_id, bam_path,
+# fastq_path). Nécessaire avant `build-controls`, qui lit
+# results/controls/{sample_id}/{sample_id}.merged.vcf.
+
+set -euo pipefail
+mkdir -p logs
+
+cd "${SLURM_SUBMIT_DIR}"
+
+SAMPLES_TSV="controls.tsv"
+# +1 pour sauter la ligne d'en-tête du TSV
+LINE=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "${SAMPLES_TSV}")
+SAMPLE_ID=$(echo "${LINE}" | cut -f1)
+BAM=$(echo "${LINE}" | cut -f2)
+FASTQ=$(echo "${LINE}" | cut -f3)
+
+echo "Contrôle ${SLURM_ARRAY_TASK_ID}: ${SAMPLE_ID} (bam=${BAM}, fastq=${FASTQ})"
+
+str-toolkit detect \
+  --sample "${SAMPLE_ID}" \
+  --bam "${BAM}" \
+  --fastq "${FASTQ}" \
+  --config config.yaml \
+  --threads "${SLURM_CPUS_PER_TASK}" \
+  -o results/controls/

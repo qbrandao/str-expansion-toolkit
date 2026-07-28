@@ -38,11 +38,19 @@ class TandemGenotypesConfig:
 
 
 @dataclass
+class LongTRConfig:
+    env: str = "longtr"
+    mmi: str = ""  # index minimap2 (peut être le même fichier que trgt.mmi)
+    regions_bed: str = ""  # BED LongTR : chrom, start(1-based), end, motif[,motif2], [nom]
+
+
+@dataclass
 class Config:
     reference: str = ""
     vamos: VamosConfig = field(default_factory=VamosConfig)
     trgt: TrgtConfig = field(default_factory=TrgtConfig)
     tandem_genotypes: TandemGenotypesConfig = field(default_factory=TandemGenotypesConfig)
+    longtr: LongTRConfig = field(default_factory=LongTRConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "Config":
@@ -54,4 +62,5 @@ class Config:
             vamos=VamosConfig(**raw.get("vamos", {})),
             trgt=TrgtConfig(**raw.get("trgt", {})),
             tandem_genotypes=TandemGenotypesConfig(**raw.get("tandem_genotypes", {})),
+            longtr=LongTRConfig(**raw.get("longtr", {})),
         )
