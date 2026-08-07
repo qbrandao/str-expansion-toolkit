@@ -1,21 +1,22 @@
 """
-Fusion des sorties VAMOS / TRGT / tandem-genotypes en un VCF unique par
-échantillon.
+Merges VAMOS / TRGT / tandem-genotypes / LongTR outputs into a single VCF
+per sample.
 
-PROBLÈME ADRESSÉ : chaque outil ancre ses coordonnées différemment pour ce
-qui est biologiquement le même locus STR (VAMOS = coord. d'assemblage,
-TRGT = coord. du catalogue bed, tandem-genotypes = coord. TRF). On ne peut
-donc pas fusionner par égalité stricte de (chrom, pos, motif) : il faut un
-matching tolérant par intervalle + motif canonique.
+PROBLEM ADDRESSED: each tool anchors its coordinates differently for what
+is biologically the same STR locus (VAMOS = assembly coordinates, TRGT =
+catalog BED coordinates, tandem-genotypes = TRF coordinates, LongTR =
+its own regions BED). Merging by strict equality of (chrom, pos, motif) is
+therefore not possible: a tolerant interval + canonical motif matching
+approach is required.
 
-IMPORTANT sur les unités : les tailles ne sont PAS forcément comparables
-entre outils (VAMOS : longueur en unités de motif ; TRGT et tandem-genotypes :
-longueur en bp, mais mesurées différemment -- TRGT par génotypage direct,
-tandem-genotypes par clustering de longueurs read-level). Ce module ne
-fusionne donc PAS les tailles en une valeur unique : chaque locus fusionné
-garde une taille par source (SIZES=vamos_hap1:42,trgt_allele1:38,...).
-L'interprétation/comparaison aux contrôles se fait en aval, source par
-source (voir str_toolkit/compare.py).
+IMPORTANT on units: sizes are NOT necessarily comparable across tools
+(VAMOS: length in motif-repeat units; TRGT and tandem-genotypes: length in
+bp, but measured differently -- TRGT via direct genotyping, tandem-genotypes
+via read-level length clustering; LongTR: bp difference from the reference,
+not an absolute length). This module therefore does NOT merge sizes into a
+single value: each merged locus keeps one size per source
+(SIZES=vamos_hap1:42,trgt_allele1:38,...). Interpretation/comparison to
+controls happens downstream, source by source (see str_toolkit/compare.py).
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from statistics import median
 import pysam
 
 # ---------------------------------------------------------------------
-# Représentation normalisée d'un call STR, indépendante de l'outil source
+# Normalized representation of an STR call, independent of the source tool
 # ---------------------------------------------------------------------
 
 @dataclass
@@ -38,12 +39,12 @@ class STRCall:
     end: int
     motif: str
     size: float
-    source: str  # ex: "vamos_hap1", "trgt_allele2", "tandem_genotypes_allele1"
+    source: str  # e.g. "vamos_hap1", "trgt_allele2", "tandem_genotypes_allele1"
     raw: dict = field(default_factory=dict)
 
 
 def canonical_motif(motif: str) -> str:
-    """Rotation circulaire minimale : AAGA / AGAA / GAAA / AAAG -> AAAG."""
+    """Minimal circular rotation: AAGA / AGAA / GAAA / AAAG -> AAAG."""
     m = motif.strip().upper()
     if not m:
         return m
@@ -52,11 +53,11 @@ def canonical_motif(motif: str) -> str:
 
 
 # ---------------------------------------------------------------------
-# Parsers par outil — ajuste les noms de champs si tes VCF/TSV diffèrent
+# Per-tool parsers -- adjust field names if your VCF/TSV files differ
 # ---------------------------------------------------------------------
 
 def _first(value):
-    """INFO peut être une valeur unique ou un tuple selon Number= dans le header."""
+    """INFO can be a single value or a tuple depending on Number= in the header."""
     if isinstance(value, (tuple, list)):
         return value[0] if value else None
     return value
@@ -64,9 +65,9 @@ def _first(value):
 
 def parse_vamos(hap_vcfs: dict[str, Path]) -> list[STRCall]:
     """
-    Lit les VCF VAMOS par haplotype (ex: {"hap1": ..., "hap2": ...}).
-    Champs utilisés (identiques à STRlist2json.py) : INFO/RU (motif,
-    premier élément si liste), INFO/LEN_H1 (taille, en unités de motif).
+    Reads the per-haplotype VAMOS VCFs (e.g. {"hap1": ..., "hap2": ...}).
+    Fields used (same as STRlist2json.py): INFO/RU (motif, first element if
+    a list), INFO/LEN_H1 (size, in motif-repeat units).
     """
     calls = []
     for hap, vcf_path in hap_vcfs.items():
@@ -97,12 +98,11 @@ def parse_vamos(hap_vcfs: dict[str, Path]) -> list[STRCall]:
 
 def parse_trgt(vcf_path: Path) -> list[STRCall]:
     """
-    Lit le VCF produit par `trgt genotype` (.vcf.gz).
+    Reads the VCF produced by `trgt genotype` (.vcf.gz).
 
-    ATTENTION : les noms de champs ci-dessous (INFO/MOTIFS ou INFO/RU,
-    FORMAT/AL) sont ceux généralement utilisés par TRGT, mais peuvent varier
-    selon la version. Vérifie avec `zcat sample.trgt.vcf.gz | grep '^##'`
-    et ajuste si besoin.
+    NOTE: the field names below (INFO/MOTIFS or INFO/RU, FORMAT/AL) are the
+    ones generally used by TRGT, but may vary by version. Check with
+    `zcat sample.trgt.vcf.gz | grep '^##'` and adjust if needed.
     """
     vcf_path = Path(vcf_path)
     if not vcf_path.exists():
@@ -117,7 +117,7 @@ def parse_trgt(vcf_path: Path) -> list[STRCall]:
             end = record.info.get("END", record.stop)
 
             for sample_name, sample_data in record.samples.items():
-                al = sample_data.get("AL")  # allele lengths en bp, ex: (10, 14)
+                al = sample_data.get("AL")  # allele lengths in bp, e.g. (10, 14)
                 if al is None:
                     continue
                 for i, allele_len in enumerate(al):
@@ -139,15 +139,15 @@ def parse_trgt(vcf_path: Path) -> list[STRCall]:
 
 def parse_longtr(vcf_path: Path) -> list[STRCall]:
     """
-    Lit le VCF produit par `LongTR` (--tr-vcf, bgzippé).
+    Reads the VCF produced by `LongTR` (--tr-vcf, bgzipped).
 
-    Champs utilisés (confirmés dans le README officiel gymrek-lab/LongTR) :
-    INFO/MOTIF (motif du locus), INFO/END, FORMAT/GB (différence en bp de
-    chaque allèle par rapport à la référence -- PAS une longueur absolue,
-    contrairement à TRGT/AL). Comme pour tandem-genotypes, cette valeur
-    reste cohérente en interne (comparaison max contrôle / diff patient
-    au sein du même outil) même si elle n'est pas directement comparable
-    aux longueurs absolues des autres outils.
+    Fields used (confirmed in the official gymrek-lab/LongTR README):
+    INFO/MOTIF (locus motif), INFO/END, FORMAT/GB (bp difference of each
+    allele from the reference -- NOT an absolute length, unlike TRGT/AL).
+    As with tandem-genotypes, this value remains internally consistent
+    (control max / patient diff comparison within the same tool) even
+    though it is not directly comparable to the absolute lengths reported
+    by other tools.
     """
     vcf_path = Path(vcf_path)
     if not vcf_path.exists():
@@ -162,7 +162,7 @@ def parse_longtr(vcf_path: Path) -> list[STRCall]:
             end = record.info.get("END", record.stop)
 
             for sample_name, sample_data in record.samples.items():
-                gb = sample_data.get("GB")  # bp diff vs référence par allèle, ex: (0, 12)
+                gb = sample_data.get("GB")  # bp diff vs reference per allele, e.g. (0, 12)
                 if gb is None:
                     continue
                 for i, bp_diff in enumerate(gb):
@@ -184,10 +184,9 @@ def parse_longtr(vcf_path: Path) -> list[STRCall]:
 
 def _split_two_alleles(values: list[float]) -> tuple[float, float]:
     """
-    Sépare une liste de longueurs par read (bp) en 2 groupes (allèle court /
-    long) au niveau du plus grand écart entre valeurs triées, puis retourne
-    la médiane de chaque groupe. Robuste au bruit read-level, contrairement
-    à un simple min/max.
+    Splits a list of per-read lengths (bp) into 2 groups (short/long allele)
+    at the largest gap between sorted values, then returns the median of
+    each group. Robust to read-level noise, unlike a simple min/max.
     """
     values = sorted(values)
     if len(values) == 1:
@@ -199,12 +198,12 @@ def _split_two_alleles(values: list[float]) -> tuple[float, float]:
 
 def _merge_overlapping_tg_rows(rows: list[dict]) -> list[dict]:
     """
-    repeats.trf.bed liste souvent plusieurs motifs candidats (périodes
-    différentes) qui se chevauchent pour le même locus TRF -- tandem-genotypes
-    rapporte alors une ligne par candidat. On regroupe les lignes dont les
-    intervalles se chevauchent (par chromosome) et on ne garde que celle
-    couverte par le plus de reads comme représentante du locus (critère
-    sans ambiguïté, contrairement à la colonne 5 -- voir parse_tandem_genotypes).
+    repeats.trf.bed often lists several overlapping candidate motifs
+    (different periods) for the same TRF locus -- tandem-genotypes then
+    reports one row per candidate. Rows whose intervals overlap (per
+    chromosome) are grouped, keeping only the one covered by the most
+    reads as the locus representative (an unambiguous criterion, unlike
+    column 5 -- see parse_tandem_genotypes).
     """
     by_chrom: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
@@ -231,21 +230,20 @@ def _merge_overlapping_tg_rows(rows: list[dict]) -> list[dict]:
 
 def parse_tandem_genotypes(tsv_path: Path) -> list[STRCall]:
     """
-    Lit le TSV produit par `tandem-genotypes repeats.bed alignments.maf`.
+    Reads the TSV produced by `tandem-genotypes repeats.bed alignments.maf`.
 
-    Format à 8 colonnes tab-séparées, colonne 5 (index 4, "gene name" /
-    "score" selon la doc officielle -- ambigu sur nos fichiers, valeurs
-    type 2.8/18.8 qui ne ressemblent pas à un nom de gène) IGNORÉE, on ne
-    l'exploite pas :
-      0 chrom, 1 start, 2 end, 3 motif, 4 (ignorée), 5 '.',
-      6 longueurs par read (bp, séparées par virgule), 7 '.'
+    8 tab-separated columns; column 5 (index 4, "gene name" / "score"
+    depending on the official docs -- ambiguous on our files, values like
+    2.8/18.8 that do not look like a gene name) is IGNORED, not used:
+      0 chrom, 1 start, 2 end, 3 motif, 4 (ignored), 5 '.',
+      6 per-read lengths (bp, comma-separated), 7 '.'
 
-    La colonne 6 est une liste de longueurs de répétition mesurées par read
-    individuel -- on la sépare en 2 groupes (allèle court/long, cf.
-    _split_two_alleles) dont on prend la médiane comme taille d'allèle en bp
-    (comparable à TRGT/AL). Les motifs candidats qui se chevauchent (issus
-    de repeats.trf.bed) sont dédoublonnés en gardant celui couvert par le
-    plus de reads (cf. _merge_overlapping_tg_rows).
+    Column 6 is a list of repeat lengths measured per individual read --
+    it is split into 2 groups (short/long allele, see _split_two_alleles),
+    whose median is taken as the allele size in bp (comparable to
+    TRGT/AL). Overlapping candidate motifs (from repeats.trf.bed) are
+    deduplicated, keeping the one covered by the most reads (see
+    _merge_overlapping_tg_rows).
     """
     tsv_path = Path(tsv_path)
     if not tsv_path.exists():
@@ -287,18 +285,18 @@ def parse_tandem_genotypes(tsv_path: Path) -> list[STRCall]:
 
 
 # ---------------------------------------------------------------------
-# Matching flou par intervalle (+ marge) et motif canonique
+# Fuzzy matching by interval (+ tolerance window) and canonical motif
 # ---------------------------------------------------------------------
 
 def cluster_calls(calls: list[STRCall], window: int = 25) -> list[list[STRCall]]:
     """
-    Regroupe les calls en loci : deux calls sont dans le même cluster si
-    leurs intervalles [start, end] se chevauchent (avec tolérance `window`
-    bp de part et d'autre) ET que leurs motifs canoniques sont identiques.
+    Groups calls into loci: two calls belong to the same cluster if their
+    [start, end] intervals overlap (with a `window` bp tolerance on either
+    side) AND their canonical motifs are identical.
 
-    Implémenté en un seul passage trié par position (balayage), avec une
-    liste de clusters "ouverts" (encore atteignables compte tenu de la
-    tolérance) — pas de comparaison O(n²) sur l'ensemble du chromosome.
+    Implemented as a single position-sorted pass (sweep), with a list of
+    "open" clusters (still reachable given the tolerance) -- no O(n^2)
+    comparison across the whole chromosome.
     """
     by_chrom: dict[str, list[STRCall]] = defaultdict(list)
     for c in calls:
@@ -355,15 +353,15 @@ def build_locus_record(cluster: list[STRCall]) -> dict:
 
 
 # ---------------------------------------------------------------------
-# Écriture du VCF fusionné
+# Writing the merged VCF
 # ---------------------------------------------------------------------
 
 _VCF_HEADER = """##fileformat=VCFv4.2
 ##source=str-expansion-toolkit merge_to_vcf
-##INFO=<ID=MOTIF,Number=1,Type=String,Description="Motif canonique du locus">
-##INFO=<ID=END,Number=1,Type=Integer,Description="Fin du locus (max des sources)">
-##INFO=<ID=SOURCES,Number=.,Type=String,Description="Outils/haplotypes/allèles ayant rapporté ce locus">
-##INFO=<ID=SIZES,Number=.,Type=String,Description="Paires source:taille (unités différentes selon l'outil, voir README)">
+##INFO=<ID=MOTIF,Number=1,Type=String,Description="Canonical motif of the locus">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End of the locus (max across sources)">
+##INFO=<ID=SOURCES,Number=.,Type=String,Description="Tools/haplotypes/alleles that reported this locus">
+##INFO=<ID=SIZES,Number=.,Type=String,Description="source:size pairs (units differ by tool, see README)">
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO
 """
 
@@ -381,7 +379,7 @@ def write_merged_vcf(records: list[dict], out_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------
-# Point d'entrée appelé par detect.merge_to_vcf
+# Entry point called by detect.merge_to_vcf
 # ---------------------------------------------------------------------
 
 def merge_tool_outputs(sample_id: str, tool_outputs: dict[str, object], outdir: Path, window: int = 25) -> Path:
@@ -404,23 +402,23 @@ def merge_tool_outputs(sample_id: str, tool_outputs: dict[str, object], outdir: 
 
 
 # ---------------------------------------------------------------------
-# Lecture du VCF fusionné (utilisé par build-controls / compare)
+# Reading the merged VCF (used by build-controls / compare)
 # ---------------------------------------------------------------------
 
-# Correspondance source (ex: "vamos_hap1", "tandem_genotypes_allele2") -> outil
+# Source (e.g. "vamos_hap1", "tandem_genotypes_allele2") -> tool mapping
 _TOOL_FAMILY_NAMES = {"vamos": "vamos", "trgt": "trgt", "tandem_genotypes": "tandem-genotypes", "longtr": "longtr"}
 
 
 def tool_family(source: str) -> str:
-    """'vamos_hap1' -> 'vamos' ; 'trgt_allele1' -> 'trgt' ; 'tandem_genotypes_allele1' -> 'tandem-genotypes'."""
+    """'vamos_hap1' -> 'vamos'; 'trgt_allele1' -> 'trgt'; 'tandem_genotypes_allele1' -> 'tandem-genotypes'."""
     prefix = source.rsplit("_", 1)[0]
     return _TOOL_FAMILY_NAMES.get(prefix, prefix)
 
 
 def parse_merged_vcf(path: Path):
     """
-    Relit un VCF produit par write_merged_vcf. Génère des dicts
-    {chrom, pos, end, motif, sizes_by_source} par locus.
+    Reads back a VCF produced by write_merged_vcf. Yields one dict per
+    locus: {chrom, pos, end, motif, sizes_by_source}.
     """
     path = Path(path)
     if not path.exists():

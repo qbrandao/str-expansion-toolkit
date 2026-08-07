@@ -1,12 +1,13 @@
 """
-Sous-commande `build-controls`.
+`build-controls` subcommand.
 
-Lit le VCF fusionné (produit par `detect`, un par échantillon contrôle :
-{controls_dir}/{sample_id}/{sample_id}.merged.vcf) et construit un registre
-JSON : pour chaque locus, la taille maximale observée SÉPARÉMENT PAR OUTIL
-(VAMOS / TRGT / tandem-genotypes), car leurs unités ne sont pas comparables.
+Reads the merged VCF (produced by `detect`, one per control sample:
+{controls_dir}/{sample_id}/{sample_id}.merged.vcf) and builds a JSON
+registry: for each locus, the maximum size observed SEPARATELY PER TOOL
+(VAMOS / TRGT / tandem-genotypes / LongTR), since their units are not
+comparable.
 
-Format du JSON produit :
+Output JSON format:
 {
   "chr1_12345_AAAG": {
     "chrom": "chr1", "pos": 12345, "motif": "AAAG",
@@ -44,7 +45,7 @@ def collect_control_calls(controls_dir: Path, sample_ids: list[str] | None = Non
     for sid in sample_ids:
         merged_vcf = controls_dir / sid / f"{sid}.merged.vcf"
         if not merged_vcf.exists():
-            logger.warning("VCF fusionné introuvable pour %s: %s", sid, merged_vcf)
+            logger.warning("Merged VCF not found for %s: %s", sid, merged_vcf)
             continue
 
         for record in merge.parse_merged_vcf(merged_vcf):
@@ -67,7 +68,7 @@ def run(args) -> int:
 
     controls_dir = Path(args.controls_dir)
     if not controls_dir.exists():
-        raise SystemExit(f"Dossier introuvable : {controls_dir}")
+        raise SystemExit(f"Directory not found: {controls_dir}")
 
     sample_ids = None
     if args.samples_list:
@@ -81,5 +82,5 @@ def run(args) -> int:
     with open(output_path, "w") as fh:
         json.dump(registry, fh, indent=2, sort_keys=True)
 
-    logger.info("JSON contrôles écrit : %s (%d loci)", output_path, len(registry))
+    logger.info("Control registry written: %s (%d loci)", output_path, len(registry))
     return 0

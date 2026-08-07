@@ -1,15 +1,14 @@
 """
-Sous-commande `detect`.
+`detect` subcommand.
 
-Lance VAMOS, TRGT et tandem-genotypes pour un ou plusieurs patients,
-puis fusionne les 3 sorties en un unique VCF par patient (voir
-str_toolkit/merge.py pour la logique de fusion : matching flou par
-intervalle + motif canonique, car les 3 outils n'ancrent pas leurs
-coordonnées de la même façon).
+Runs VAMOS, tandem-genotypes, and LongTR (TRGT opt-in) for one or more
+samples, then merges the outputs into a single VCF per sample (see
+str_toolkit/merge.py for the merge logic: fuzzy interval + canonical motif
+matching, since the tools do not anchor their coordinates the same way).
 
-Prérequis : micromamba doit être installé et les environnements référencés
-dans le config.yaml (clair3, whatshap-env, vamos, trgt, last_env, tandem-env)
-doivent déjà exister sur la machine d'exécution.
+Prerequisite: micromamba must be installed, and the environments referenced
+in config.yaml (clair3, whatshap-env, vamos, trgt, longtr, last_env,
+tandem-env) must already exist on the execution machine.
 """
 
 from __future__ import annotations
@@ -28,21 +27,21 @@ logger = logging.getLogger(__name__)
 
 class Sample(NamedTuple):
     sample_id: str
-    bam_path: str | None = None    # BAM déjà aligné (utilisé par VAMOS/clair3)
-    fastq_path: str | None = None  # fastq(.gz) brut fusionné (utilisé par TRGT et tandem-genotypes)
+    bam_path: str | None = None    # already-aligned BAM (used by VAMOS/clair3)
+    fastq_path: str | None = None  # raw merged fastq(.gz) (used by TRGT/LongTR and tandem-genotypes)
 
 
 def _require(value, sample_id: str, field_name: str, tool: str) -> str:
     if not value:
         raise SystemExit(
-            f"Sample {sample_id}: '{field_name}' est requis pour lancer {tool} "
-            f"(à fournir via --bam/--fastq ou la colonne correspondante du TSV)."
+            f"Sample {sample_id}: '{field_name}' is required to run {tool} "
+            f"(provide it via --bam/--fastq or the corresponding TSV column)."
         )
     return value
 
 
 # ---------------------------------------------------------------------
-# VAMOS : clair3 (phasing) -> whatshap haplotag/split -> vamos --contig x2
+# VAMOS: clair3 (phasing) -> whatshap haplotag/split -> vamos --contig x2
 # ---------------------------------------------------------------------
 
 def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int) -> dict[str, Path]:
@@ -67,7 +66,7 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int) -> dict[s
             ],
         )
     else:
-        logger.info("[%s] VAMOS: clair3 déjà fait, skip", sid)
+        logger.info("[%s] VAMOS: clair3 already done, skipping", sid)
 
     haplotagged_bam = outdir / f"{sid}_haplotagged.bam"
     haplotype_tsv = outdir / f"{sid}_haplotype.tsv"
@@ -87,7 +86,7 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int) -> dict[s
             ],
         )
     else:
-        logger.info("[%s] VAMOS: haplotagged bam déjà présent, skip", sid)
+        logger.info("[%s] VAMOS: haplotagged bam already present, skipping", sid)
 
     h1 = outdir / f"{sid}_h1.bam"
     h2 = outdir / f"{sid}_h2.bam"
@@ -106,7 +105,7 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int) -> dict[s
         run_in_env(cvamos.env_whatshap, ["samtools", "index", str(h1)])
         run_in_env(cvamos.env_whatshap, ["samtools", "index", str(h2)])
     else:
-        logger.info("[%s] VAMOS: h1/h2 bam déjà présents, skip", sid)
+        logger.info("[%s] VAMOS: h1/h2 bam already present, skipping", sid)
 
     hap_vcfs = {}
     for hap, hap_bam in (("hap1", h1), ("hap2", h2)):
@@ -125,16 +124,16 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int) -> dict[s
                 ],
             )
         else:
-            logger.info("[%s] VAMOS: %s déjà présent, skip", sid, hap_vcf.name)
+            logger.info("[%s] VAMOS: %s already present, skipping", sid, hap_vcf.name)
         hap_vcfs[hap] = hap_vcf
 
     return hap_vcfs
 
 
 # ---------------------------------------------------------------------
-# Alignement partagé (minimap2 ONT + tri + indexation), réutilisé par TRGT
-# et LongTR : les deux outils lisent un BAM/CRAM déjà aligné, inutile de
-# ré-aligner deux fois si les deux tournent dans le même run.
+# Shared alignment (ONT minimap2 + sort + index), reused by TRGT and
+# LongTR: both tools read an already-aligned BAM/CRAM, so there is no need
+# to align twice if both run in the same job.
 # ---------------------------------------------------------------------
 
 def _ensure_ont_sorted_bam(sample: Sample, mmi: str, align_env: str, outdir: Path, threads: int, tool_label: str) -> Path:
@@ -147,7 +146,7 @@ def _ensure_ont_sorted_bam(sample: Sample, mmi: str, align_env: str, outdir: Pat
     sorted_bam = outdir / f"{sid}.sorted.bam"
     logger.info("[%s] %s: minimap2 (map-ont) align + sort", sid, tool_label)
     run_in_env(
-        align_env,  # doit fournir minimap2 + samtools
+        align_env,  # must provide minimap2 + samtools
         [],
         shell_pipeline=(
             f"minimap2 -t {threads} -ax map-ont -Y {mmi} {fastq} "
@@ -158,14 +157,14 @@ def _ensure_ont_sorted_bam(sample: Sample, mmi: str, align_env: str, outdir: Pat
 
 
 # ---------------------------------------------------------------------
-# TRGT : minimap2 (align + sort) -> trgt genotype
+# TRGT: minimap2 (align + sort) -> trgt genotype
 #
-# ATTENTION : TRGT est conçu pour des reads PacBio HiFi et n'a pas de
-# support officiel pour les données ONT (cf. Aliyev et al. 2026, bioRxiv,
-# qui exclut explicitement TRGT des benchmarks ONT pour cette raison). Ce
-# n'est donc PAS un outil par défaut de `detect` -- il ne tourne que si
-# explicitement demandé via `--tools ... trgt ...`. À documenter comme
-# usage hors cadre officiel dans toute publication utilisant ces résultats.
+# NOTE: TRGT is designed for PacBio HiFi reads and has no official support
+# for ONT data (see Aliyev et al. 2026, bioRxiv, which explicitly excludes
+# TRGT from ONT benchmarks for this reason). It is therefore NOT a default
+# tool in `detect` -- it only runs if explicitly requested via
+# `--tools ... trgt ...`. Any publication using these results should
+# document this as an off-label use.
 # ---------------------------------------------------------------------
 
 def run_trgt(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
@@ -176,7 +175,7 @@ def run_trgt(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
 
     bai = Path(f"{sorted_bam}.bai")
     if not bai.exists():
-        logger.info("[%s] TRGT: indexation bam", sid)
+        logger.info("[%s] TRGT: indexing bam", sid)
         run_in_env(ctrgt.env, ["samtools", "index", "-@", str(threads), str(sorted_bam)])
 
     out_prefix = outdir / f"{sid}.trgt"
@@ -195,18 +194,18 @@ def run_trgt(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
             ],
         )
     else:
-        logger.info("[%s] TRGT: %s déjà présent, skip", sid, out_vcf.name)
+        logger.info("[%s] TRGT: %s already present, skipping", sid, out_vcf.name)
 
     return out_vcf
 
 
 # ---------------------------------------------------------------------
-# LongTR : minimap2 (align + sort, partagé avec TRGT) -> LongTR
+# LongTR: minimap2 (align + sort, shared with TRGT) -> LongTR
 #
-# Outil ONT-natif (HipSTR adapté aux reads longs, PacBio HiFi ET ONT).
-# Choisi comme 3e outil par défaut à la place de TRGT pour les données ONT
-# -- meilleure concordance avec les assemblages, mais nécessite des reads
-# de bonne qualité/profondeur suffisante (--min-reads=10 par défaut).
+# ONT-native tool (a long-read adaptation of HipSTR, supporting both
+# PacBio HiFi and ONT). Chosen as the third default tool in place of TRGT
+# for ONT data -- better concordance with assemblies, but requires
+# sufficient read quality/depth (--min-reads=10 by default).
 # ---------------------------------------------------------------------
 
 def run_longtr(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
@@ -217,14 +216,14 @@ def run_longtr(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
 
     bai = Path(f"{sorted_bam}.bai")
     if not bai.exists():
-        logger.info("[%s] LongTR: indexation bam", sid)
+        logger.info("[%s] LongTR: indexing bam", sid)
         run_in_env(clongtr.env, ["samtools", "index", "-@", str(threads), str(sorted_bam)])
 
     out_vcf = outdir / f"{sid}.longtr.vcf.gz"
     if not out_vcf.exists():
         logger.info("[%s] LongTR: genotyping", sid)
-        # LongTR n'a pas de multi-threading natif ; --bam-samps/--bam-libs
-        # évite de dépendre de tags @RG corrects dans le BAM produit par minimap2.
+        # LongTR has no native multi-threading; --bam-samps/--bam-libs avoids
+        # relying on correct @RG tags in the BAM produced by minimap2.
         run_in_env(
             clongtr.env,
             [
@@ -238,13 +237,13 @@ def run_longtr(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
             ],
         )
     else:
-        logger.info("[%s] LongTR: %s déjà présent, skip", sid, out_vcf.name)
+        logger.info("[%s] LongTR: %s already present, skipping", sid, out_vcf.name)
 
     return out_vcf
 
 
 # ---------------------------------------------------------------------
-# tandem-genotypes : last-train -> lastal | last-split -> tandem-genotypes
+# tandem-genotypes: last-train -> lastal | last-split -> tandem-genotypes
 # ---------------------------------------------------------------------
 
 def run_tandem_genotypes(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
@@ -253,7 +252,7 @@ def run_tandem_genotypes(sample: Sample, cfg: Config, outdir: Path, threads: int
 
     tsv_out = outdir / f"{sid}.tandem_genotypes.tsv"
     if tsv_out.exists():
-        logger.info("[%s] tandem-genotypes: déjà fait, skip", sid)
+        logger.info("[%s] tandem-genotypes: already done, skipping", sid)
         return tsv_out
 
     fastq = _require(sample.fastq_path, sid, "fastq_path", "tandem-genotypes")
@@ -296,15 +295,15 @@ TOOL_RUNNERS = {
 
 
 # ---------------------------------------------------------------------
-# Fusion des 3 sorties en un VCF unique (str_toolkit.merge)
+# Merge the tool outputs into a single VCF (str_toolkit.merge)
 # ---------------------------------------------------------------------
 
 def merge_to_vcf(sample: Sample, tool_outputs: dict[str, object], outdir: Path) -> Path:
     """
-    Fusionne les sorties des outils lancés en un unique VCF par patient, via
-    un matching flou par intervalle + motif canonique (voir str_toolkit/merge.py
-    pour le détail de l'algorithme et les limites, notamment sur les unités
-    de taille qui diffèrent selon l'outil).
+    Merges the outputs of the tools that were run into a single VCF per
+    sample, via fuzzy interval + canonical motif matching (see
+    str_toolkit/merge.py for the algorithm and its limitations, in
+    particular the size units, which differ across tools).
     """
     return merge.merge_tool_outputs(sample.sample_id, tool_outputs, outdir)
 
@@ -326,7 +325,7 @@ def detect_one_sample(
         tool_outputs[tool_name] = runner(sample, cfg, sample_outdir, threads)
 
     final_vcf = merge_to_vcf(sample, tool_outputs, sample_outdir)
-    logger.info("Sample %s: VCF final -> %s", sample.sample_id, final_vcf)
+    logger.info("Sample %s: final VCF -> %s", sample.sample_id, final_vcf)
     return final_vcf
 
 
@@ -339,7 +338,7 @@ def run(args) -> int:
 
     if args.sample:
         if not args.bam and not args.fastq:
-            raise SystemExit("--bam et/ou --fastq requis quand --sample est utilisé")
+            raise SystemExit("--bam and/or --fastq is required when --sample is used")
         samples = [Sample(sample_id=args.sample, bam_path=args.bam, fastq_path=args.fastq)]
     else:
         samples = [Sample(**row) for row in read_samples_list(args.samples_list)]
@@ -349,5 +348,5 @@ def run(args) -> int:
         vcf_path = detect_one_sample(sample, cfg, outdir, args.tools, args.threads)
         produced_vcfs.append(vcf_path)
 
-    logger.info("Terminé : %d VCF produits dans %s", len(produced_vcfs), outdir)
+    logger.info("Done: %d VCFs produced in %s", len(produced_vcfs), outdir)
     return 0

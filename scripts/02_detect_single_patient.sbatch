@@ -6,11 +6,12 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
-#SBATCH --partition=<ta_partition>
+#SBATCH --partition=<your_partition>
 
-# Detect complet (VAMOS + TRGT + tandem-genotypes + fusion) pour UN patient.
-# clair3 (VAMOS) + last-train/lastal genome entier sont les étapes les plus
-# lentes/gourmandes -> voir README pour le détail des ressources.
+# Full detect (default tools: VAMOS + tandem-genotypes + LongTR, plus
+# merge) for ONE patient. clair3 (VAMOS) and last-train/lastal on the
+# whole genome are the slowest/most resource-intensive steps -- see the
+# README for resource guidance.
 
 set -euo pipefail
 mkdir -p logs

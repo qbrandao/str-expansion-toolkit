@@ -6,9 +6,9 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
-#SBATCH --partition=<ta_partition>
+#SBATCH --partition=<your_partition>
 #SBATCH --array=1-N%4
-# ^ Remplace N par le nombre de lignes de patients.tsv (hors en-tête) :
+# ^ Replace N with the number of lines in patients.tsv (excluding header):
 #     tail -n +2 patients.tsv | wc -l
 
 set -euo pipefail

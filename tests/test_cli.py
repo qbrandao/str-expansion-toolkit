@@ -5,7 +5,7 @@ def test_detect_requires_sample_or_list():
     parser = build_parser()
     try:
         parser.parse_args(["detect", "--config", "config.yaml", "-o", "out/"])
-        assert False, "devrait échouer sans --sample ni --samples-list"
+        assert False, "should fail without --sample or --samples-list"
     except SystemExit:
         pass
 

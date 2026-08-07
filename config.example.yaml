@@ -1,13 +1,13 @@
-# Copie ce fichier (ex: config.yaml) et adapte les chemins à ton environnement.
-# Tous les environnements micromamba listés ici (clair3, whatshap-env, vamos,
-# trgt, longtr, last_env, tandem-env) doivent déjà exister sur la machine
-# d'exécution.
+# Copy this file (e.g. config.yaml) and adapt the paths to your environment.
+# All micromamba environments listed here (clair3, whatshap-env, vamos,
+# trgt, longtr, last_env, tandem-env) must already exist on the execution
+# machine.
 #
-# NOTE : TRGT n'est PAS lancé par défaut par `detect` (--tools par défaut =
-# vamos, tandem-genotypes, longtr). TRGT est conçu pour des reads PacBio HiFi
-# et n'a pas de support officiel pour l'ONT -- il reste disponible via
-# `--tools ... trgt ...` mais son usage sur des données ONT doit être
-# explicitement documenté comme hors cadre officiel dans toute publication.
+# NOTE: TRGT is NOT run by default by `detect` (default --tools =
+# vamos, tandem-genotypes, longtr). TRGT is designed for PacBio HiFi reads
+# and has no official support for ONT -- it remains available via
+# `--tools ... trgt ...` but its use on ONT data must be explicitly
+# documented as off-label in any resulting publication.
 
 reference: /home/user/scripts/GRCh38-GIABv3_std.fa
 
@@ -26,16 +26,15 @@ trgt:
 tandem_genotypes:
   env_last: last_env
   env_tandem: tandem-env
-  # Préfixe d'un index LAST déjà construit avec `lastdb` (le "ref" du script bash)
+  # Prefix of a LAST index already built with `lastdb` (the "ref" in the bash script)
   last_ref_db: /home/user/scripts/ref
   repeats_bed: /home/user/scripts/repeats.trf.bed
 
 longtr:
   env: longtr
-  # Index minimap2 -- peut être le même fichier que trgt.mmi (même génome de
-  # référence), l'alignement est réutilisé automatiquement si les deux outils
-  # tournent dans le même run.
+  # minimap2 index -- can be the same file as trgt.mmi (same reference
+  # genome); the alignment is automatically reused if both tools run in
+  # the same job.
   mmi: /home/user/scripts/GRCh38-GIABv3_std_lrhq.mmi
-  # BED LongTR : chrom, start(1-based), end, motif[,motif2], [nom] (pas d'en-tête)
+  # LongTR BED: chrom, start (1-based), end, motif[,motif2], [name] (no header)
   regions_bed: /home/user/scripts/longtr.regions.bed
-

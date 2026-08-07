@@ -10,7 +10,7 @@ def test_canonical_motif_case_insensitive():
 
 
 def test_cluster_merges_shifted_coordinates_same_motif():
-    # Même locus biologique, ancré différemment par VAMOS/TRGT/tandem-genotypes
+    # Same biological locus, anchored differently by VAMOS/TRGT/tandem-genotypes
     calls = [
         STRCall(chrom="chr1", start=1000, end=1040, motif="AAAG", size=42, source="vamos_hap1"),
         STRCall(chrom="chr1", start=1006, end=1046, motif="AAGA", size=38, source="trgt_allele1"),

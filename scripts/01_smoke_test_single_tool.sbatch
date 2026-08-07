@@ -1,17 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=str-smoke-trgt
+#SBATCH --job-name=str-smoke-longtr
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=04:00:00
-#SBATCH --partition=<ta_partition>
+#SBATCH --partition=<your_partition>
 
-# Test rapide de bout en bout sur UN SEUL outil (TRGT, le plus rapide des 3 :
-# minimap2 + trgt genotype) pour valider que config.yaml, les chemins de
-# référence et les environnements micromamba sont corrects, avant de lancer
-# le pipeline complet (3 outils, beaucoup plus long).
+# Quick end-to-end test on a SINGLE tool (LongTR: minimap2 + LongTR
+# genotyping) to validate that config.yaml, reference paths, and
+# micromamba environments are correct, before running the full pipeline
+# (default tool set, much slower).
 
 set -euo pipefail
 mkdir -p logs
@@ -24,6 +24,6 @@ str-toolkit detect \
   --sample "${SAMPLE_ID}" \
   --fastq "${FASTQ}" \
   --config config.yaml \
-  --tools trgt \
+  --tools longtr \
   --threads "${SLURM_CPUS_PER_TASK}" \
   -o results/smoke_test/

@@ -52,8 +52,8 @@ def _make_empty_bed_gz(path):
 def test_build_comparison_table_diff_per_tool_and_sort(tmp_path):
     patients_dir = tmp_path / "patients"
 
-    # Locus 1 : expansion nette en VAMOS et TRGT
-    # Locus 2 : légère expansion, un seul outil dispo -> diff plus petit
+    # Locus 1: clear expansion in VAMOS and TRGT
+    # Locus 2: slight expansion, only one tool available -> smaller diff
     _write_merged_vcf(
         patients_dir / "p01" / "p01.merged.vcf",
         [
@@ -81,7 +81,7 @@ def test_build_comparison_table_diff_per_tool_and_sort(tmp_path):
     )
 
     assert len(df) == 2
-    # Tri décroissant sur max_diff : locus1 (diff=40) avant locus2 (diff=2)
+    # Descending sort on max_diff: locus1 (diff=40) before locus2 (diff=2)
     assert df.iloc[0]["chrom"] == "chr1"
     assert df.iloc[0]["vamos_diff"] == 40
     assert df.iloc[0]["trgt_diff"] == 37

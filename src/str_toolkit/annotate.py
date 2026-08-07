@@ -1,10 +1,21 @@
 """
-Annotation gène / feature (exon, UTR, intronique, intergénique, centromère,
-télomère) pour un locus (chrom, pos). Porté de STRcompar2json.py.
+Genomic annotation for STR/VNTR loci.
 
-Nécessite deux BED gzippés :
-  - genes_bed : chrom, start, end, gene
-  - exons_bed : chrom, start, end, "GENE_exonN"  (ex: exons MANE Select)
+Two complementary annotation layers are provided:
+
+1. `annotate_locus` -- gene name + feature (exon, UTR, intronic, intergenic,
+   centromere, telomere) for a single locus. Used by `compare` for
+   per-patient diagnostic reporting. Ported from the original
+   STRcompar2json.py script.
+
+2. `classify_location` / `classify_motif` -- mutually exclusive genomic
+   location and motif-length categories used to build the genome-wide
+   VNTR repertoire (stratified analyses of variability/instability by
+   location and motif class).
+
+Requires two gzipped BED files:
+  - genes_bed: chrom, start, end, gene
+  - exons_bed: chrom, start, end, "GENE_exonN"  (e.g. MANE Select exons)
 """
 
 from __future__ import annotations
@@ -12,6 +23,11 @@ from __future__ import annotations
 import gzip
 from pathlib import Path
 
+# Centromere and telomere coordinates (hg38). These currently define the
+# immediate centromeric/telomeric boundaries reused from the original
+# pipeline; widen them if a broader "para-centromeric"/"subtelomeric"
+# definition is intended for the genome-wide repertoire (see paper Methods
+# 2.8 -- this is a scientific choice to confirm, not just an engineering one).
 CENTROMERE_COORDS = {
     "chr1": (121535434, 124535434),
     "chr2": (92326171, 95326171),
@@ -66,6 +82,20 @@ HG38_TELOMERES = {
     "chrY": {"p": (0, 10000), "q": None},
 }
 
+# Default promoter window: distance (bp) upstream of the transcription
+# start site considered part of the "5' region including promoter"
+# location category. Adjust to match the convention cited in the paper
+# (e.g. Ensembl regulatory build) once decided.
+DEFAULT_PROMOTER_WINDOW_BP = 2000
+
+MOTIF_LENGTH_CATEGORIES = {
+    1: "mononucleotide",
+    2: "dinucleotide",
+    3: "trinucleotide",
+    4: "tetranucleotide",
+    5: "pentanucleotide",
+}
+
 
 def load_genes(path: str | Path) -> dict:
     dict_genes: dict = {}
@@ -89,8 +119,17 @@ def load_exons(path: str | Path) -> dict:
     return dict_exons
 
 
+def _gene_strand(exons: dict) -> tuple[list[str], str]:
+    """Returns (exon names sorted 5'->3', strand) inferred from exon order."""
+    sorted_exons = sorted(exons.keys(), key=lambda x: int(x.replace("exon", "")))
+    first_start = exons[sorted_exons[0]]["start"]
+    last_start = exons[sorted_exons[-1]]["start"]
+    strand = "+" if first_start < last_start else "-"
+    return sorted_exons, strand
+
+
 def annotate_locus(chrom: str, pos: int, dict_genes: dict, dict_exons: dict) -> tuple[str, str]:
-    """Retourne (genes_csv, features_csv) pour un locus donné, comme dans STRcompar2json.py."""
+    """Returns (genes_csv, features_csv) for a given locus, as in STRcompar2json.py."""
     list_genes: list[str] = []
     list_features: list[str] = []
 
@@ -104,10 +143,7 @@ def annotate_locus(chrom: str, pos: int, dict_genes: dict, dict_exons: dict) -> 
             list_features.append("intronic")
             continue
 
-        sorted_exons = sorted(exons.keys(), key=lambda x: int(x.replace("exon", "")))
-        first_start = exons[sorted_exons[0]]["start"]
-        last_start = exons[sorted_exons[-1]]["start"]
-        strand = "+" if first_start < last_start else "-"
+        sorted_exons, strand = _gene_strand(exons)
 
         if (strand == "+" and pos < exons[sorted_exons[0]]["start"]) or (
             strand == "-" and pos > exons[sorted_exons[0]]["end"]
@@ -142,3 +178,78 @@ def annotate_locus(chrom: str, pos: int, dict_genes: dict, dict_exons: dict) -> 
         list_features.append(".")
 
     return ",".join(list_genes), ",".join(sorted(set(list_features)))
+
+
+def classify_location(
+    chrom: str,
+    pos: int,
+    dict_genes: dict,
+    dict_exons: dict,
+    promoter_bp: int = DEFAULT_PROMOTER_WINDOW_BP,
+) -> str:
+    """
+    Classifies a locus into ONE mutually exclusive genomic location category,
+    for the genome-wide VNTR repertoire (paper Methods 2.8):
+
+      - "subtelomeric"     : within the telomeric window of a chromosome end
+      - "paracentromeric"  : within the centromeric window
+      - "5prime_region"    : promoter window upstream of the TSS, or 5' UTR
+      - "exonic"           : within an exon (3' UTR is counted as exonic,
+                              since it is part of the terminal exon)
+      - "intronic"         : within a gene but not exonic/5' region
+      - "intergenic_other" : intergenic, and not subtelomeric/paracentromeric
+
+    Checked in this priority order: subtelomeric > paracentromeric > gene
+    overlap (5prime_region > exonic > intronic) > intergenic_other.
+    """
+    telo = HG38_TELOMERES.get(chrom, {})
+    if telo.get("p") and telo["p"][0] < pos < telo["p"][1]:
+        return "subtelomeric"
+    if telo.get("q") and telo["q"][0] < pos < telo["q"][1]:
+        return "subtelomeric"
+
+    centro = CENTROMERE_COORDS.get(chrom)
+    if centro and centro[0] < pos < centro[1]:
+        return "paracentromeric"
+
+    for gene, coords in dict_genes.get(chrom, {}).items():
+        if not (coords["start"] < pos < coords["end"]):
+            continue
+
+        exons = dict_exons.get(chrom, {}).get(gene)
+        if not exons:
+            return "intronic"
+
+        sorted_exons, strand = _gene_strand(exons)
+        tss = exons[sorted_exons[0]]["start"] if strand == "+" else exons[sorted_exons[0]]["end"]
+        promoter_start = tss - promoter_bp if strand == "+" else tss
+        promoter_end = tss if strand == "+" else tss + promoter_bp
+
+        if promoter_start < pos < promoter_end:
+            return "5prime_region"
+        if (strand == "+" and pos < exons[sorted_exons[0]]["start"]) or (
+            strand == "-" and pos > exons[sorted_exons[0]]["end"]
+        ):
+            return "5prime_region"  # annotated 5' UTR, outside the promoter window itself
+
+        for exon_coords in exons.values():
+            if exon_coords["start"] < pos < exon_coords["end"]:
+                return "exonic"
+        # Includes 3' UTR: not modeled separately (see docstring), and any
+        # position within the gene body that fell through the checks above.
+        return "intronic"
+
+    return "intergenic_other"
+
+
+def classify_motif(motif: str) -> str:
+    """
+    Classifies a repeat motif into a length-based category (paper Methods 2.9):
+    mononucleotide / dinucleotide / trinucleotide / tetranucleotide /
+    pentanucleotide / hexanucleotide_or_longer.
+
+    Expects a single motif string (compound/comma-separated motif lists are
+    already reduced to their first element by each tool's parser in merge.py).
+    """
+    length = len(motif.strip())
+    return MOTIF_LENGTH_CATEGORIES.get(length, "hexanucleotide_or_longer")

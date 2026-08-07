@@ -14,8 +14,8 @@ TG_SAMPLE_LINES = [
 def test_split_two_alleles_finds_the_biggest_gap():
     values = [259, 267, 269, 271, 272, 318, 318, 319]
     low, high = _split_two_alleles(values)
-    assert low == 269  # médiane de [259,267,269,271,272]
-    assert high == 318  # médiane de [318,318,319]
+    assert low == 269  # median of [259,267,269,271,272]
+    assert high == 318  # median of [318,318,319]
 
 
 def test_split_two_alleles_single_value():
@@ -28,8 +28,8 @@ def test_parse_tandem_genotypes_dedups_overlapping_motif_candidates(tmp_path):
 
     calls = parse_tandem_genotypes(tsv_path)
 
-    # 4 lignes candidates chevauchantes, toutes avec 8 reads -> la dernière
-    # (motif TTCCC) l'emporte (max() garde le dernier en cas d'égalité).
+    # 4 overlapping candidate lines, all with 8 reads -> the last one
+    # (motif TTCCC) wins (max() keeps the last one on ties).
     assert len(calls) == 2
     assert {c.source for c in calls} == {"tandem_genotypes_allele1", "tandem_genotypes_allele2"}
     kept_motif = calls[0].motif
@@ -46,7 +46,7 @@ def test_merge_overlapping_tg_rows_keeps_most_reads():
         {"chrom": "chr1", "start": 300, "end": 350, "motif": "AC", "values": [15, 16]},
     ]
     kept = _merge_overlapping_tg_rows(rows)
-    assert len(kept) == 2  # (100-150 + 110-160 se chevauchent) et (300-350 isolé)
+    assert len(kept) == 2  # (100-150 + 110-160 overlap) and (300-350 isolated)
     n_reads = sorted(len(r["values"]) for r in kept)
     assert n_reads == [2, 3]
 

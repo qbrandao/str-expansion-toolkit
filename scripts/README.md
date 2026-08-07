@@ -1,47 +1,47 @@
-# Scripts SLURM de test
+# SLURM test scripts
 
-À lancer depuis la racine du repo (`sbatch scripts/00_unit_tests.sbatch`, etc.),
-ou tout enchaîner d'un coup avec `./scripts/submit_full_pipeline.sh`.
+Run from the repo root (`sbatch scripts/00_unit_tests.sbatch`, etc.), or
+chain everything at once with `./scripts/submit_full_pipeline.sh`.
 
-## Prérequis (à placer à la racine du repo avant de lancer)
+## Prerequisites (place at the repo root before running)
 
-- `config.yaml` (copié depuis `config.example.yaml`, chemins adaptés)
-- `controls.tsv`, `patients.tsv` : TSV avec en-tête `sample_id\tbam_path\tfastq_path`
-- `genes.bed.gz`, `MANE_Select_exons.bed.gz` : utilisés par `compare`
-- `longtr.regions_bed` (config.yaml) : voir `./scripts/prepare_longtr_bed.sh` ci-dessous
-  pour le générer à partir du catalogue Adotto (nécessite `gawk`)
-- Adapter `<ta_partition>` dans chaque `.sbatch` (partition SLURM de ton cluster)
-- `mkdir -p logs` (fait automatiquement par les scripts, mais le dossier
-  doit être accessible en écriture depuis les nœuds de calcul)
+- `config.yaml` (copied from `config.example.yaml`, paths adapted)
+- `controls.tsv`, `patients.tsv`: TSV with header `sample_id\tbam_path\tfastq_path`
+- `genes.bed.gz`, `MANE_Select_exons.bed.gz`: used by `compare`
+- `longtr.regions_bed` (config.yaml): see `./scripts/prepare_longtr_bed.sh`
+  below to generate it from the Adotto catalog (requires `gawk`)
+- Adapt `<your_partition>` in each `.sbatch` file (your cluster's SLURM partition)
+- `mkdir -p logs` (done automatically by the scripts, but the directory
+  must be writable from compute nodes)
 
-## Préparer le catalogue de régions LongTR
+## Recommended order (first run, step by step)
+
+1. `00_unit_tests.sbatch` — validates the package installation (no bioinformatics tool is run)
+2. `01_smoke_test_single_tool.sbatch` — validates `config.yaml`/paths with LongTR only (fast)
+3. `02_detect_single_patient.sbatch` — validates the full pipeline (default tools) on 1 patient
+4. `03_detect_controls_array.sbatch` — detection across the whole control cohort (job array,
+   adjust `--array=1-N%4` where N = number of lines in `controls.tsv`)
+5. `04_detect_patients_array.sbatch` — detection across all patients (job array, same idea)
+6. `05_build_controls.sbatch` — after step 4 has fully completed (control JSON registry)
+7. `06_compare.sbatch` — after steps 4 and 5 have completed (final report)
+
+## Preparing the LongTR regions catalog
 
 ```bash
 ./scripts/prepare_longtr_bed.sh /mnt/references
 ```
 
-Télécharge le catalogue Adotto (hg38) et le convertit au format attendu par
-LongTR (`chrom, start 1-based, end, motif[,motif2], nom`). Nécessite `gawk`
-(le script vérifie sa présence et s'arrête sinon).
+Downloads the Adotto catalog (hg38) and converts it to the format expected
+by LongTR (`chrom, start 1-based, end, motif[,motif2], name`). Requires
+`gawk` (the script checks for it and exits otherwise).
 
-## Ordre recommandé (première fois, pas à pas)
-
-1. `00_unit_tests.sbatch` — valide l'installation du package (aucun outil bioinfo lancé)
-2. `01_smoke_test_single_tool.sbatch` — valide `config.yaml`/les chemins avec TRGT seul (rapide)
-3. `02_detect_single_patient.sbatch` — valide le pipeline complet (3 outils) sur 1 patient
-4. `03_detect_controls_array.sbatch` — détection sur toute la cohorte contrôle (job array,
-   adapter `--array=1-N%4` où N = nombre de lignes de `controls.tsv`)
-5. `04_detect_patients_array.sbatch` — détection sur tous les patients (job array, idem)
-6. `05_build_controls.sbatch` — après la fin complète de l'étape 4 (registre JSON)
-7. `06_compare.sbatch` — après la fin des étapes 5 et 6 (rapport final)
-
-## Tout enchaîner automatiquement
+## Chaining everything automatically
 
 ```bash
 ./scripts/submit_full_pipeline.sh
 ```
 
-Soumet 00 → 01 → (03 array + 04 array en parallèle) → 05 → 06, avec les
-dépendances `--dependency=afterok:...` calculées automatiquement (nombre de
-lignes de `controls.tsv`/`patients.tsv` compté dynamiquement). Suivi avec
+Submits 00 → 01 → (03 array + 04 array in parallel) → 05 → 06, with
+`--dependency=afterok:...` computed automatically (job array size counted
+dynamically from `controls.tsv`/`patients.tsv`). Track progress with
 `squeue -u $USER`.

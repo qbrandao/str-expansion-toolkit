@@ -1,20 +1,27 @@
 """
-Point d'entrée du CLI `str-toolkit`.
+Entry point for the `str-toolkit` CLI.
 
-Trois sous-commandes :
-  1) detect         : lance VAMOS + TRGT + tandem-genotypes pour un ou
-                       plusieurs patients, fusionne les sorties en un VCF final.
-  2) build-controls  : lance la détection sur une cohorte de contrôles et
-                       génère un JSON {STR -> taille max observée, ...}.
-  3) compare         : compare les expansions des patients au JSON de
-                       contrôles, produit un tableau trié.
+Four subcommands:
+  1) detect          : runs VAMOS + tandem-genotypes + LongTR (TRGT opt-in)
+                        for one or more samples, merges the outputs into a
+                        final VCF.
+  2) build-controls   : reads the merged VCFs of a control cohort and builds
+                        a JSON registry {locus -> max size observed per tool}.
+  3) compare          : compares patient expansions to the control registry,
+                        produces a sorted report.
+  4) repertoire       : builds the genome-wide VNTR repertoire from a control
+                        cohort, classified by genomic location and motif.
 
-Usage :
+Usage:
   str-toolkit detect --sample p01 --bam p01.sorted.bam --fastq p01.merged.fastq.gz \
       --config config.yaml -o out/
   str-toolkit detect --samples-list patients.tsv --config config.yaml -o out/
-  str-toolkit build-controls --samples-list controls.tsv --config config.yaml -o controls.json
-  str-toolkit compare --patients-vcf out/*/*.merged.vcf --controls-json controls.json -o report.tsv
+  str-toolkit build-controls --controls-dir out/controls/ -o controls.json
+  str-toolkit compare --patients-dir out/patients/ --controls-json controls.json \
+      --genes-bed genes.bed.gz --exons-bed exons.bed.gz -o report.tsv
+  str-toolkit repertoire --controls-dir out/controls/ \
+      --genes-bed genes.bed.gz --exons-bed exons.bed.gz \
+      -o repertoire.tsv --summary repertoire_summary.tsv
 """
 
 from __future__ import annotations
@@ -22,13 +29,14 @@ from __future__ import annotations
 import argparse
 import sys
 
-from str_toolkit import detect, controls, compare
+from str_toolkit import detect, controls, compare, repertoire
+from str_toolkit.annotate import DEFAULT_PROMOTER_WINDOW_BP
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="str-toolkit",
-        description="Détection et comparaison d'expansions STR (VAMOS / TRGT / tandem-genotypes).",
+        description="Tandem repeat expansion detection and comparison (VAMOS / tandem-genotypes / LongTR / TRGT).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -37,33 +45,33 @@ def build_parser() -> argparse.ArgumentParser:
     # ---------------------------------------------------------------
     p_detect = subparsers.add_parser(
         "detect",
-        help="Lance les 3 outils sur un ou plusieurs patients et fusionne en un VCF.",
+        help="Run the detection tools for one or more samples and merge into a VCF.",
     )
     sample_group = p_detect.add_mutually_exclusive_group(required=True)
     sample_group.add_argument(
-        "--sample", help="Identifiant + chemin BAM/CRAM d'un seul patient (voir --bam)."
+        "--sample", help="Sample ID for a single sample (see --bam/--fastq)."
     )
     sample_group.add_argument(
         "--samples-list",
-        help="Fichier TSV avec colonnes: sample_id, bam_path (un patient par ligne).",
+        help="TSV file with columns: sample_id, bam_path, fastq_path (one sample per line).",
     )
-    p_detect.add_argument("--bam", help="BAM déjà aligné (utilisé par VAMOS/clair3).")
-    p_detect.add_argument("--fastq", help="Fastq(.gz) brut fusionné (utilisé par TRGT et tandem-genotypes).")
+    p_detect.add_argument("--bam", help="Already-aligned BAM (used by VAMOS/clair3).")
+    p_detect.add_argument("--fastq", help="Raw merged fastq(.gz) (used by TRGT/LongTR and tandem-genotypes).")
     p_detect.add_argument(
         "--config",
         required=True,
-        help="Fichier config.yaml (chemins refs, catalogues, environnements micromamba).",
+        help="Path to config.yaml (reference paths, catalogs, micromamba environments).",
     )
-    p_detect.add_argument("-o", "--outdir", required=True, help="Dossier de sortie.")
+    p_detect.add_argument("-o", "--outdir", required=True, help="Output directory.")
     p_detect.add_argument(
         "--tools",
         nargs="+",
         default=["vamos", "tandem-genotypes", "longtr"],
         choices=["vamos", "trgt", "tandem-genotypes", "longtr"],
-        help="Sous-ensemble d'outils à lancer (par défaut: vamos, tandem-genotypes, longtr -- "
-        "tous ONT-natifs. TRGT n'est PAS lancé par défaut : il n'a pas de support officiel "
-        "pour les données ONT (conçu pour PacBio HiFi), il ne tourne que si explicitement "
-        "demandé ici, ex. --tools vamos trgt tandem-genotypes longtr.",
+        help="Subset of tools to run (default: vamos, tandem-genotypes, longtr -- all "
+        "ONT-native). TRGT is NOT run by default: it has no official support for ONT "
+        "data (designed for PacBio HiFi); it only runs if explicitly requested here, "
+        "e.g. --tools vamos trgt tandem-genotypes longtr.",
     )
     p_detect.add_argument("--threads", type=int, default=4)
     p_detect.set_defaults(func=detect.run)
@@ -73,20 +81,20 @@ def build_parser() -> argparse.ArgumentParser:
     # ---------------------------------------------------------------
     p_controls = subparsers.add_parser(
         "build-controls",
-        help="Génère le JSON de référence (tailles max par outil) à partir des VCF fusionnés d'une cohorte de contrôles.",
+        help="Build the reference JSON (max size per tool) from a control cohort's merged VCFs.",
     )
     p_controls.add_argument(
         "--controls-dir",
         required=True,
-        help="Dossier de sortie de `detect` pour la cohorte contrôle "
+        help="Output directory of `detect` for the control cohort "
         "({controls-dir}/{sample_id}/{sample_id}.merged.vcf).",
     )
     p_controls.add_argument(
         "--samples-list",
-        help="Optionnel: TSV (colonne sample_id) pour restreindre aux échantillons listés "
-        "(par défaut: tous les sous-dossiers de --controls-dir).",
+        help="Optional: TSV (sample_id column) to restrict to the listed samples "
+        "(default: all subdirectories of --controls-dir).",
     )
-    p_controls.add_argument("-o", "--output", required=True, help="Chemin du JSON de sortie.")
+    p_controls.add_argument("-o", "--output", required=True, help="Path to the output JSON.")
     p_controls.set_defaults(func=controls.run)
 
     # ---------------------------------------------------------------
@@ -94,44 +102,84 @@ def build_parser() -> argparse.ArgumentParser:
     # ---------------------------------------------------------------
     p_compare = subparsers.add_parser(
         "compare",
-        help="Compare les expansions des patients au JSON de contrôles.",
+        help="Compare patient expansions to the control registry.",
     )
     p_compare.add_argument(
         "--patients-dir",
         required=True,
-        help="Dossier de sortie de `detect` pour les patients "
+        help="Output directory of `detect` for the patients "
         "({patients-dir}/{sample_id}/{sample_id}.merged.vcf).",
     )
     p_compare.add_argument(
         "--patients",
         nargs="+",
-        help="Optionnel: liste d'identifiants patients à comparer "
-        "(par défaut: tous les sous-dossiers de --patients-dir).",
+        help="Optional: list of patient IDs to compare "
+        "(default: all subdirectories of --patients-dir).",
     )
     p_compare.add_argument(
-        "--controls-json", required=True, help="JSON généré par `build-controls`."
+        "--controls-json", required=True, help="JSON generated by `build-controls`."
     )
     p_compare.add_argument(
-        "--genes-bed", required=True, help="BED gzippé chrom/start/end/gene."
+        "--genes-bed", required=True, help="Gzipped BED: chrom/start/end/gene."
     )
     p_compare.add_argument(
-        "--exons-bed", required=True, help="BED gzippé chrom/start/end/GENE_exonN (ex: MANE Select)."
+        "--exons-bed", required=True, help="Gzipped BED: chrom/start/end/GENE_exonN (e.g. MANE Select)."
     )
     p_compare.add_argument(
         "-x", "--threshold", type=int, default=0,
-        help="Seuil additionnel: ne garder que diff_vs_controls > threshold (défaut: 0).",
+        help="Additional threshold: only keep rows where diff_vs_controls > threshold (default: 0).",
     )
     p_compare.add_argument(
         "-t", "--triplet-only", action="store_true",
-        help="Ne garder que les STR à motif de 3 pb ou plus.",
+        help="Only keep STRs with a motif of 3 bp or longer.",
     )
     p_compare.add_argument(
-        "-o", "--output", required=True, help="Fichier de sortie (TSV/CSV)."
+        "-o", "--output", required=True, help="Output file (TSV/CSV)."
     )
     p_compare.add_argument(
-        "--format", choices=["tsv", "csv"], default="tsv", help="Format du rapport de sortie."
+        "--format", choices=["tsv", "csv"], default="tsv", help="Output report format."
     )
     p_compare.set_defaults(func=compare.run)
+
+    # ---------------------------------------------------------------
+    # 4) repertoire
+    # ---------------------------------------------------------------
+    p_repertoire = subparsers.add_parser(
+        "repertoire",
+        help="Build the genome-wide VNTR repertoire (location/motif classification) from a control cohort.",
+    )
+    p_repertoire.add_argument(
+        "--controls-dir",
+        required=True,
+        help="Output directory of `detect` for the control cohort "
+        "({controls-dir}/{sample_id}/{sample_id}.merged.vcf).",
+    )
+    p_repertoire.add_argument(
+        "--samples-list",
+        help="Optional: TSV (sample_id column) to restrict to the listed samples "
+        "(default: all subdirectories of --controls-dir).",
+    )
+    p_repertoire.add_argument(
+        "--genes-bed", required=True, help="Gzipped BED: chrom/start/end/gene."
+    )
+    p_repertoire.add_argument(
+        "--exons-bed", required=True, help="Gzipped BED: chrom/start/end/GENE_exonN (e.g. MANE Select)."
+    )
+    p_repertoire.add_argument(
+        "--promoter-bp", type=int, default=DEFAULT_PROMOTER_WINDOW_BP,
+        help=f"Promoter window (bp) upstream of the TSS counted as '5prime_region' (default: {DEFAULT_PROMOTER_WINDOW_BP}).",
+    )
+    p_repertoire.add_argument(
+        "-o", "--output", required=True, help="Output file: one row per locus (TSV/CSV)."
+    )
+    p_repertoire.add_argument(
+        "--summary",
+        help="Optional: also write a location x motif category count summary to this path (paper Table 2).",
+    )
+    p_repertoire.add_argument(
+        "--format", choices=["tsv", "csv"], default="tsv", help="Output format."
+    )
+    p_repertoire.set_defaults(func=repertoire.run)
 
     return parser
 

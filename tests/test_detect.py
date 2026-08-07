@@ -1,8 +1,8 @@
 """
-Vérifie la logique d'orchestration (idempotence "skip si déjà fait",
-noms de fichiers produits) sans exécuter les vrais outils bioinfo :
-on mocke str_toolkit.utils.run_in_env et on simule la présence de
-fichiers de sortie.
+Checks the orchestration logic (idempotence "skip if already done",
+output file names) without running the real bioinformatics tools:
+str_toolkit.utils.run_in_env is mocked, and the presence of output
+files is simulated.
 """
 
 from pathlib import Path
@@ -43,12 +43,12 @@ def test_run_trgt_skips_if_vcf_already_present(tmp_path, monkeypatch):
     out = detect.run_trgt(sample, _make_cfg(), tmp_path, threads=4)
 
     assert out == tmp_path / f"{sid}.trgt.vcf.gz"
-    assert calls == []  # rien relancé, tout existait déjà
+    assert calls == []  # nothing re-run, everything already existed
 
 
 def test_run_trgt_requires_fastq_when_no_bam_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(detect, "run_in_env", lambda *a, **k: None)
-    sample = detect.Sample(sample_id="p01")  # ni bam ni fastq
+    sample = detect.Sample(sample_id="p01")  # neither bam nor fastq
     with pytest.raises(SystemExit):
         detect.run_trgt(sample, _make_cfg(), tmp_path, threads=4)
 
@@ -87,19 +87,19 @@ def test_run_longtr_skips_if_vcf_already_present(tmp_path, monkeypatch):
     out = detect.run_longtr(sample, _make_cfg(), tmp_path, threads=4)
 
     assert out == tmp_path / f"{sid}.longtr.vcf.gz"
-    assert calls == []  # rien relancé, tout existait déjà
+    assert calls == []  # nothing re-run, everything already existed
 
 
 def test_run_longtr_requires_fastq_when_no_bam_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(detect, "run_in_env", lambda *a, **k: None)
-    sample = detect.Sample(sample_id="p01")  # ni bam ni fastq
+    sample = detect.Sample(sample_id="p01")  # neither bam nor fastq
     with pytest.raises(SystemExit):
         detect.run_longtr(sample, _make_cfg(), tmp_path, threads=4)
 
 
 def test_run_trgt_and_run_longtr_reuse_same_alignment(tmp_path, monkeypatch):
-    """TRGT et LongTR doivent réutiliser le même .sorted.bam s'il existe déjà
-    (pas de ré-alignement en double quand les deux tournent dans le même run)."""
+    """TRGT and LongTR must reuse the same .sorted.bam if it already exists
+    (no duplicate alignment when both run in the same job)."""
     calls = []
     monkeypatch.setattr(detect, "run_in_env", lambda *a, **k: calls.append((a, k)))
 
@@ -109,11 +109,11 @@ def test_run_trgt_and_run_longtr_reuse_same_alignment(tmp_path, monkeypatch):
 
     detect.run_trgt(sample, cfg, tmp_path, threads=4)
     align_calls_after_trgt = sum(1 for a, k in calls if "minimap2" in str(k))
-    # run_in_env est mocké (no-op) : simule le .sorted.bam que minimap2 aurait produit
+    # run_in_env is mocked (no-op): simulate the .sorted.bam minimap2 would have produced
     (tmp_path / f"{sid}.sorted.bam").touch()
 
     detect.run_longtr(sample, cfg, tmp_path, threads=4)
     align_calls_after_longtr = sum(1 for a, k in calls if "minimap2" in str(k))
 
     assert align_calls_after_trgt == 1
-    assert align_calls_after_longtr == 1  # pas de second alignement pour LongTR
+    assert align_calls_after_longtr == 1  # no second alignment for LongTR

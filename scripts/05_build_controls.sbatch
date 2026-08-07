@@ -6,12 +6,12 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --time=01:00:00
-#SBATCH --partition=<ta_partition>
+#SBATCH --partition=<your_partition>
 
-# Léger : ne fait que parser les VCF fusionnés déjà produits par
+# Lightweight: only parses the merged VCFs already produced by
 # 03_detect_controls_array.sbatch (results/controls/{id}/{id}.merged.vcf).
-# À lancer APRÈS que tous les jobs array de détection contrôles soient
-# terminés (cf. submit_full_pipeline.sh pour l'enchaînement automatique).
+# Run AFTER all control detection array jobs have completed (see
+# submit_full_pipeline.sh for automatic chaining).
 
 set -euo pipefail
 mkdir -p logs

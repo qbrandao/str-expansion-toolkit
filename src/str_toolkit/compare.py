@@ -1,16 +1,17 @@
 """
-Sous-commande `compare`.
+`compare` subcommand.
 
-Compare les tailles STR des patients (VCF fusionné VAMOS+TRGT+tandem-genotypes,
-produit par `detect`) au registre de contrôles (`build-controls`), un diff
-PAR OUTIL disponible à chaque locus (les tailles ne sont pas comparables
-entre outils : VAMOS = longueur en unités de motif, TRGT = longueur en bp,
-tandem-genotypes = delta de copies vs référence).
+Compares patient STR sizes (merged VCF from VAMOS+TRGT+tandem-genotypes+LongTR,
+produced by `detect`) to the control registry (`build-controls`), computing
+a diff PER AVAILABLE TOOL at each locus (sizes are not comparable across
+tools: VAMOS = length in motif-repeat units, TRGT = length in bp,
+tandem-genotypes = length in bp derived from read clustering, LongTR = bp
+difference from reference).
 
-Une ligne est gardée si au moins un outil dépasse le seuil. `n_tools_expanded`
-compte combien d'outils confirment l'expansion (signal de confiance :
-une expansion vue par 2-3 outils orthogonaux est plus fiable qu'une vue par
-un seul). Tri décroissant sur `max_diff`.
+A row is kept if at least one tool exceeds the threshold. `n_tools_expanded`
+counts how many tools confirm the expansion (a confidence signal: an
+expansion seen by 2-3 orthogonal tools is more reliable than one seen by a
+single tool). Sorted descending on `max_diff`.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ def build_comparison_table(
     for pid in patient_ids:
         merged_vcf = patients_dir / pid / f"{pid}.merged.vcf"
         if not merged_vcf.exists():
-            logger.warning("VCF fusionné introuvable pour %s: %s", pid, merged_vcf)
+            logger.warning("Merged VCF not found for %s: %s", pid, merged_vcf)
             continue
 
         for record in merge.parse_merged_vcf(merged_vcf):
@@ -66,9 +67,9 @@ def build_comparison_table(
             locus_id = f"{chrom}_{pos}_{motif}"
             control_entry = controls_registry.get(locus_id)
             if not control_entry:
-                continue  # STR jamais observé chez les contrôles : pas de base de comparaison
+                continue  # STR never observed in controls: no basis for comparison
 
-            # Taille patient par outil = max sur les allèles/haplotypes disponibles pour cet outil
+            # Patient size per tool = max across the alleles/haplotypes available for that tool
             sizes_by_tool: dict[str, float] = {}
             for source, size in record["sizes_by_source"].items():
                 tool = merge.tool_family(source)
@@ -116,7 +117,7 @@ def run(args) -> int:
 
     patients_dir = Path(args.patients_dir)
     if not patients_dir.exists():
-        raise SystemExit(f"Dossier introuvable : {patients_dir}")
+        raise SystemExit(f"Directory not found: {patients_dir}")
 
     patient_ids = args.patients or sorted(p.name for p in patients_dir.iterdir() if p.is_dir())
 
@@ -133,5 +134,5 @@ def run(args) -> int:
     sep = "," if args.format == "csv" else "\t"
     df.to_csv(args.output, sep=sep, index=False)
 
-    logger.info("Rapport écrit : %s (%d lignes)", args.output, len(df))
+    logger.info("Report written: %s (%d rows)", args.output, len(df))
     return 0

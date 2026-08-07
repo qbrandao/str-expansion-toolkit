@@ -1,8 +1,8 @@
 """
-Configuration des 3 outils : chemins de référence, catalogues, environnements
-micromamba. Chargée depuis un fichier YAML passé via --config.
+Configuration for the detection tools: reference paths, catalogs, and
+micromamba environments. Loaded from a YAML file passed via --config.
 
-Exemple : voir config.example.yaml à la racine du repo.
+Example: see config.example.yaml at the repo root.
 """
 
 from __future__ import annotations
@@ -33,15 +33,15 @@ class TrgtConfig:
 class TandemGenotypesConfig:
     env_last: str = "last_env"
     env_tandem: str = "tandem-env"
-    last_ref_db: str = ""  # préfixe d'un index construit avec `lastdb`
+    last_ref_db: str = ""  # prefix of an index built with `lastdb`
     repeats_bed: str = ""
 
 
 @dataclass
 class LongTRConfig:
     env: str = "longtr"
-    mmi: str = ""  # index minimap2 (peut être le même fichier que trgt.mmi)
-    regions_bed: str = ""  # BED LongTR : chrom, start(1-based), end, motif[,motif2], [nom]
+    mmi: str = ""  # minimap2 index (can be the same file as trgt.mmi)
+    regions_bed: str = ""  # LongTR BED: chrom, start(1-based), end, motif[,motif2], [name]
 
 
 @dataclass
