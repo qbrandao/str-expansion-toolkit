@@ -178,6 +178,73 @@ gene/feature reporting (exon, UTR, intronic, intergenic, centromere,
 telomere) -- distinct from the mutually-exclusive `classify_location` used
 by `repertoire`.
 
+### 5) Germline (meiotic) instability from parent-offspring duos
+
+```bash
+str-toolkit meiotic-instability \
+  --duos duos.tsv \
+  --data-dir results/ \
+  --genes-bed genes.bed.gz \
+  --exons-bed MANE_Select_exons.bed.gz \
+  -o meiotic_instability.tsv \
+  --summary meiotic_instability_by_duo.tsv
+```
+
+`duos.tsv` columns: `duo_id, parent_id, child_id, duo_type` (`duo_type` in
+`mother_son`/`mother_daughter`/`father_son`/`father_daughter`). Both
+`parent_id` and `child_id` must have already been run through `detect`
+(`{data-dir}/{id}/{id}.merged.vcf`).
+
+For each duo and each locus shared between parent and child, each child
+allele is matched to its nearest-sized parental allele (a standard
+simplification -- not true parent-of-origin phasing), and the size
+difference is recorded, per available tool (VAMOS/tandem-genotypes/LongTR;
+never merged across tools, see [Genomic and motif classification](#4-build-the-genome-wide-vntr-repertoire)
+above on size units).
+
+`-o` writes one row per (duo, locus, tool). `--summary` additionally writes
+one row per (duo, tool, location, motif category) with the median diff and
+locus count -- **this is the correct table to use when comparing duo
+types** (mother-son vs. father-daughter, etc.): the thousands of loci
+within a single duo share genetic background and sequencing run, so
+treating each locus as an independent observation across duos would
+understate uncertainty (pseudo-replication).
+
+### 6) Somatic (mitotic) instability from per-read heterogeneity
+
+```bash
+str-toolkit somatic-instability \
+  --samples-list all_samples.tsv \
+  --detect-dir results/ \
+  --genes-bed genes.bed.gz \
+  --exons-bed MANE_Select_exons.bed.gz \
+  --min-off-allele-reads 3 \
+  -o somatic_instability.tsv
+```
+
+Unlike meiotic instability, this needs no family structure -- any sample
+run through `detect` can contribute (controls, patients, duo individuals).
+It reads the tools' **raw, per-sample outputs** directly
+(`{detect-dir}/{id}/{id}.longtr.vcf.gz` and
+`{detect-dir}/{id}/{id}.tandem_genotypes.tsv`), not the merged VCF, since
+individual-read detail is collapsed away during merging. VAMOS is not used
+here: it reports per-haplotype consensus assemblies, not per-read
+measurements.
+
+At each locus, a read is flagged as a candidate mosaic observation if it
+differs from every called allele by at least one full repeat-motif unit
+(robust to the ONT indel error rate in repetitive sequence). A locus is
+only called mosaic if `--min-off-allele-reads` (default 3) reads support
+the same off-allele size, to avoid single-read sequencing errors being
+counted as instability.
+
+⚠️ The LongTR `FORMAT/ALLREADS` parser excludes a sentinel bucket inferred
+from HipSTR-family tutorials (`bp_diff <= -900`, LongTR's short-read
+ancestor) for reads that could not be confidently placed. This has **not**
+been confirmed against a real LongTR output file -- check with
+`bcftools view sample.longtr.vcf.gz | grep ALLREADS` and adjust
+`ALLREADS_SENTINEL_THRESHOLD` in `instability.py` if needed.
+
 ## Sample file format
 
 TSV file with a header, used by `--samples-list` in `detect` (`bam_path`
@@ -193,11 +260,15 @@ patient02	/data/bam/patient02.sorted.bam	/data/fastq/patient02.merged.fastq.gz
 
 End-to-end functional: `detect` (VAMOS/tandem-genotypes/LongTR by default,
 TRGT opt-in, + multi-tool merging), `build-controls`, `compare` (per-tool
-registry and diffs, gene/feature annotation), and `repertoire` (genome-wide
-VNTR repertoire, classified by genomic location and motif).
+registry and diffs, gene/feature annotation), `repertoire` (genome-wide
+VNTR repertoire, classified by genomic location and motif),
+`meiotic-instability` (parent-offspring duos, nearest-size allele matching),
+and `somatic-instability` (per-read mosaicism detection via LongTR
+ALLREADS and tandem-genotypes raw read lengths).
 
-Not yet implemented: meiotic (parent-offspring duo) and somatic (per-read
-mosaicism) instability analyses -- planned as a future subcommand.
+⚠️ `somatic-instability`'s handling of LongTR's ALLREADS sentinel value is
+inferred from HipSTR-family documentation, not yet confirmed against a real
+LongTR output file -- see the note in "Somatic (mitotic) instability" above.
 
 Output formats **confirmed** on real files:
 - TRGT: `INFO/MOTIFS`, `FORMAT/AL` (allele lengths in bp).

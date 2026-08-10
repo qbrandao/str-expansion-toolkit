@@ -1,16 +1,22 @@
 """
 Entry point for the `str-toolkit` CLI.
 
-Four subcommands:
-  1) detect          : runs VAMOS + tandem-genotypes + LongTR (TRGT opt-in)
-                        for one or more samples, merges the outputs into a
-                        final VCF.
-  2) build-controls   : reads the merged VCFs of a control cohort and builds
-                        a JSON registry {locus -> max size observed per tool}.
-  3) compare          : compares patient expansions to the control registry,
-                        produces a sorted report.
-  4) repertoire       : builds the genome-wide VNTR repertoire from a control
-                        cohort, classified by genomic location and motif.
+Six subcommands:
+  1) detect               : runs VAMOS + tandem-genotypes + LongTR (TRGT
+                             opt-in) for one or more samples, merges the
+                             outputs into a final VCF.
+  2) build-controls        : reads the merged VCFs of a control cohort and
+                             builds a JSON registry {locus -> max size
+                             observed per tool}.
+  3) compare               : compares patient expansions to the control
+                             registry, produces a sorted report.
+  4) repertoire            : builds the genome-wide VNTR repertoire from a
+                             control cohort, classified by genomic location
+                             and motif.
+  5) meiotic-instability    : germline instability from parent-offspring
+                             duos (nearest-size allele matching).
+  6) somatic-instability    : somatic (mosaic) instability from per-read
+                             heterogeneity within single samples.
 
 Usage:
   str-toolkit detect --sample p01 --bam p01.sorted.bam --fastq p01.merged.fastq.gz \
@@ -22,6 +28,11 @@ Usage:
   str-toolkit repertoire --controls-dir out/controls/ \
       --genes-bed genes.bed.gz --exons-bed exons.bed.gz \
       -o repertoire.tsv --summary repertoire_summary.tsv
+  str-toolkit meiotic-instability --duos duos.tsv --data-dir out/ \
+      --genes-bed genes.bed.gz --exons-bed exons.bed.gz \
+      -o meiotic.tsv --summary meiotic_by_duo.tsv
+  str-toolkit somatic-instability --samples-list all_samples.tsv --detect-dir out/ \
+      --genes-bed genes.bed.gz --exons-bed exons.bed.gz -o somatic.tsv
 """
 
 from __future__ import annotations
@@ -29,7 +40,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from str_toolkit import detect, controls, compare, repertoire
+from str_toolkit import detect, controls, compare, repertoire, instability
 from str_toolkit.annotate import DEFAULT_PROMOTER_WINDOW_BP
 
 
@@ -180,6 +191,72 @@ def build_parser() -> argparse.ArgumentParser:
         "--format", choices=["tsv", "csv"], default="tsv", help="Output format."
     )
     p_repertoire.set_defaults(func=repertoire.run)
+
+    # ---------------------------------------------------------------
+    # 5) meiotic-instability
+    # ---------------------------------------------------------------
+    p_meiotic = subparsers.add_parser(
+        "meiotic-instability",
+        help="Germline instability from parent-offspring duos (nearest-size allele matching).",
+    )
+    p_meiotic.add_argument(
+        "--duos", required=True,
+        help="TSV with columns: duo_id, parent_id, child_id, duo_type "
+        "(duo_type in mother_son/mother_daughter/father_son/father_daughter).",
+    )
+    p_meiotic.add_argument(
+        "--data-dir", required=True,
+        help="Output directory of `detect` containing {sample_id}/{sample_id}.merged.vcf "
+        "for every parent_id/child_id referenced in --duos.",
+    )
+    p_meiotic.add_argument("--genes-bed", required=True, help="Gzipped BED: chrom/start/end/gene.")
+    p_meiotic.add_argument("--exons-bed", required=True, help="Gzipped BED: chrom/start/end/GENE_exonN.")
+    p_meiotic.add_argument(
+        "--promoter-bp", type=int, default=DEFAULT_PROMOTER_WINDOW_BP,
+        help=f"Promoter window (bp) upstream of the TSS (default: {DEFAULT_PROMOTER_WINDOW_BP}).",
+    )
+    p_meiotic.add_argument("-o", "--output", required=True, help="Per-locus long-format output (TSV/CSV).")
+    p_meiotic.add_argument(
+        "--summary",
+        help="Optional: also write a per-duo summary (median diff, n_loci) to this path -- "
+        "the correct unit of replication for comparing duo types, see instability.py docstring.",
+    )
+    p_meiotic.add_argument("--format", choices=["tsv", "csv"], default="tsv", help="Output format.")
+    p_meiotic.set_defaults(func=instability.run_meiotic)
+
+    # ---------------------------------------------------------------
+    # 6) somatic-instability
+    # ---------------------------------------------------------------
+    p_somatic = subparsers.add_parser(
+        "somatic-instability",
+        help="Somatic (mosaic) instability from per-read heterogeneity within single samples.",
+    )
+    p_somatic.add_argument(
+        "--samples-list", required=True,
+        help="TSV with a sample_id column (any cohort: controls, patients, duo individuals -- "
+        "no family structure required).",
+    )
+    p_somatic.add_argument(
+        "--detect-dir", required=True,
+        help="Output directory of `detect` containing {sample_id}/{sample_id}.longtr.vcf.gz "
+        "and {sample_id}/{sample_id}.tandem_genotypes.tsv (the raw per-tool outputs, NOT the "
+        "merged VCF, since read-level detail is lost during merging). VAMOS is not used here "
+        "as it reports per-haplotype consensus rather than individual-read measurements.",
+    )
+    p_somatic.add_argument("--genes-bed", required=True, help="Gzipped BED: chrom/start/end/gene.")
+    p_somatic.add_argument("--exons-bed", required=True, help="Gzipped BED: chrom/start/end/GENE_exonN.")
+    p_somatic.add_argument(
+        "--promoter-bp", type=int, default=DEFAULT_PROMOTER_WINDOW_BP,
+        help=f"Promoter window (bp) upstream of the TSS (default: {DEFAULT_PROMOTER_WINDOW_BP}).",
+    )
+    p_somatic.add_argument(
+        "--min-off-allele-reads", type=int, default=3,
+        help="Minimum number of reads supporting the same off-allele size to call a locus "
+        "mosaic (default: 3, to avoid single-read sequencing errors being counted as instability).",
+    )
+    p_somatic.add_argument("-o", "--output", required=True, help="Per-locus output (TSV/CSV).")
+    p_somatic.add_argument("--format", choices=["tsv", "csv"], default="tsv", help="Output format.")
+    p_somatic.set_defaults(func=instability.run_somatic)
 
     return parser
 

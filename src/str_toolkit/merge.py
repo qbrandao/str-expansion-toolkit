@@ -228,22 +228,15 @@ def _merge_overlapping_tg_rows(rows: list[dict]) -> list[dict]:
     return kept
 
 
-def parse_tandem_genotypes(tsv_path: Path) -> list[STRCall]:
+def _read_tandem_genotypes_rows(tsv_path: Path) -> list[dict]:
     """
-    Reads the TSV produced by `tandem-genotypes repeats.bed alignments.maf`.
-
-    8 tab-separated columns; column 5 (index 4, "gene name" / "score"
-    depending on the official docs -- ambiguous on our files, values like
-    2.8/18.8 that do not look like a gene name) is IGNORED, not used:
-      0 chrom, 1 start, 2 end, 3 motif, 4 (ignored), 5 '.',
-      6 per-read lengths (bp, comma-separated), 7 '.'
-
-    Column 6 is a list of repeat lengths measured per individual read --
-    it is split into 2 groups (short/long allele, see _split_two_alleles),
-    whose median is taken as the allele size in bp (comparable to
-    TRGT/AL). Overlapping candidate motifs (from repeats.trf.bed) are
-    deduplicated, keeping the one covered by the most reads (see
-    _merge_overlapping_tg_rows).
+    Shared row-reading logic for tandem-genotypes TSVs: parses the 8-column
+    format and deduplicates overlapping candidate motifs (see
+    _merge_overlapping_tg_rows). Returns one dict per locus with the RAW
+    per-read length list still intact (`values`) -- used both by
+    parse_tandem_genotypes (which reduces `values` to 2 allele sizes) and
+    by str_toolkit.instability (which needs the raw per-read distribution
+    for somatic mosaicism detection).
     """
     tsv_path = Path(tsv_path)
     if not tsv_path.exists():
@@ -266,8 +259,28 @@ def parse_tandem_genotypes(tsv_path: Path) -> list[STRCall]:
                 continue
             rows.append({"chrom": chrom, "start": start, "end": end, "motif": motif, "values": values})
 
+    return _merge_overlapping_tg_rows(rows)
+
+
+def parse_tandem_genotypes(tsv_path: Path) -> list[STRCall]:
+    """
+    Reads the TSV produced by `tandem-genotypes repeats.bed alignments.maf`.
+
+    8 tab-separated columns; column 5 (index 4, "gene name" / "score"
+    depending on the official docs -- ambiguous on our files, values like
+    2.8/18.8 that do not look like a gene name) is IGNORED, not used:
+      0 chrom, 1 start, 2 end, 3 motif, 4 (ignored), 5 '.',
+      6 per-read lengths (bp, comma-separated), 7 '.'
+
+    Column 6 is a list of repeat lengths measured per individual read --
+    it is split into 2 groups (short/long allele, see _split_two_alleles),
+    whose median is taken as the allele size in bp (comparable to
+    TRGT/AL). Overlapping candidate motifs (from repeats.trf.bed) are
+    deduplicated, keeping the one covered by the most reads (see
+    _merge_overlapping_tg_rows).
+    """
     calls = []
-    for row in _merge_overlapping_tg_rows(rows):
+    for row in _read_tandem_genotypes_rows(tsv_path):
         allele1, allele2 = _split_two_alleles(row["values"])
         for i, size in enumerate((allele1, allele2)):
             calls.append(

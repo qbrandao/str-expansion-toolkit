@@ -50,6 +50,17 @@ def run_cmd(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProces
     return subprocess.run(cmd, check=check)
 
 
+def read_tsv_dicts(path: str, required_columns: set[str]) -> list[dict]:
+    """Generic TSV reader: validates required columns are present, returns rows as dicts."""
+    with open(path, newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        fieldnames = set(reader.fieldnames or [])
+        missing = required_columns - fieldnames
+        if missing:
+            raise SystemExit(f"{path}: missing columns: {', '.join(sorted(missing))}")
+        return [dict(row) for row in reader]
+
+
 def read_samples_list(path: str) -> list[dict]:
     """
     Reads a TSV with a required `sample_id` column, and optional `bam_path` /
