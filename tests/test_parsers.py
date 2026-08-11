@@ -85,7 +85,10 @@ def _write_longtr_vcf(path):
     header = pysam.VariantHeader()
     header.add_line('##INFO=<ID=MOTIF,Number=1,Type=String,Description="motif">')
     header.add_line('##INFO=<ID=END,Number=1,Type=Integer,Description="end">')
-    header.add_line('##FORMAT=<ID=GB,Number=.,Type=Integer,Description="bp diff vs reference">')
+    # LongTR packs per-allele values into a single '|'-joined string (Number=1,
+    # Type=String), NOT a comma-separated numeric array -- confirmed on a real
+    # LongTR output line (C9orf72 locus, GB="-6|6721").
+    header.add_line('##FORMAT=<ID=GB,Number=1,Type=String,Description="bp diff vs reference">')
     header.add_line('##contig=<ID=chr1,length=248956422>')
     header.add_sample("sample01")
     with pysam.VariantFile(str(path), "w", header=header) as vf:
@@ -94,7 +97,7 @@ def _write_longtr_vcf(path):
             alleles=("N", "<STR>"),
             info={"MOTIF": "AAAG", "END": 1040},
         )
-        record.samples["sample01"]["GB"] = (0, 12)
+        record.samples["sample01"]["GB"] = "0|12"
         vf.write(record)
 
 
@@ -113,3 +116,39 @@ def test_parse_longtr_reads_motif_and_gb(tmp_path):
 
 def test_parse_longtr_missing_file_returns_empty(tmp_path):
     assert parse_longtr(tmp_path / "does_not_exist.vcf.gz") == []
+
+
+def test_parse_longtr_c9orf72_real_data(tmp_path):
+    """
+    Regression test built from a real LongTR output line (C9orf72 locus,
+    chr9:27573455, GCCCCG hexanucleotide repeat -- the ALS/FTD pathogenic
+    expansion locus). GB packs alleles as a single '|'-joined string
+    ("-6|6721"), NOT a comma-separated numeric array as the VCF spec would
+    normally imply for a multi-valued FORMAT field. This locks in the fix
+    for a bug where naive iteration over GB silently iterated over string
+    characters instead of the two allele values.
+    """
+    header = pysam.VariantHeader()
+    header.add_line('##INFO=<ID=MOTIF,Number=1,Type=String,Description="motif">')
+    header.add_line('##INFO=<ID=END,Number=1,Type=Integer,Description="end">')
+    header.add_line('##FORMAT=<ID=GB,Number=1,Type=String,Description="bp diff vs reference">')
+    header.add_line('##contig=<ID=chr9,length=138394717>')
+    header.add_sample("patient01")
+
+    uncompressed = tmp_path / "c9orf72.vcf"
+    with pysam.VariantFile(str(uncompressed), "w", header=header) as vf:
+        record = vf.new_record(
+            contig="chr9", start=27573454, stop=27573581,
+            alleles=("N", "<STR>"),
+            info={"MOTIF": "GCCCCG", "END": 27573581},
+        )
+        record.samples["patient01"]["GB"] = "-6|6721"
+        vf.write(record)
+    vcf_path = tmp_path / "c9orf72.vcf.gz"
+    pysam.tabix_compress(str(uncompressed), str(vcf_path))
+
+    calls = parse_longtr(vcf_path)
+    assert len(calls) == 2
+    assert all(c.motif == "GCCCCG" for c in calls)
+    sizes = sorted(c.size for c in calls)
+    assert sizes == [-6.0, 6721.0]  # a 6bp contraction allele and a ~1120-unit pathogenic expansion

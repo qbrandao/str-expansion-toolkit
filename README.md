@@ -266,9 +266,12 @@ VNTR repertoire, classified by genomic location and motif),
 and `somatic-instability` (per-read mosaicism detection via LongTR
 ALLREADS and tandem-genotypes raw read lengths).
 
-⚠️ `somatic-instability`'s handling of LongTR's ALLREADS sentinel value is
-inferred from HipSTR-family documentation, not yet confirmed against a real
-LongTR output file -- see the note in "Somatic (mitotic) instability" above.
+⚠️ LongTR's GB and ALLREADS field FORMAT (pipe-separated values) is now
+confirmed on real data (see below). The ALLREADS sentinel value handling
+(reads that could not be confidently placed) is still inferred from
+HipSTR-family documentation only -- no sentinel value appeared in the real
+line used for testing, so this remains unconfirmed. See the note in
+"Somatic (mitotic) instability" above.
 
 Output formats **confirmed** on real files:
 - TRGT: `INFO/MOTIFS`, `FORMAT/AL` (allele lengths in bp).
@@ -278,8 +281,14 @@ Output formats **confirmed** on real files:
   taken as the allele size (bp). Since the TRF bed often lists several
   overlapping candidate motifs for the same locus, these candidates are
   deduplicated, keeping the one covered by the most reads.
-- LongTR: `INFO/MOTIF`, `FORMAT/GB` (bp difference from reference, per
-  allele) — per the official gymrek-lab/LongTR README.
+- LongTR: `INFO/MOTIF`, `FORMAT/GB` and `FORMAT/ALLREADS` -- **confirmed on
+  a real LongTR line (C9orf72 locus, chr9:27573455)**. Both fields pack
+  their per-allele/per-read values into a single `|`-joined string (e.g.
+  `GB=-6|6721`), NOT the comma-separated array the VCF spec would suggest
+  for a multi-valued FORMAT field. Naive iteration over the raw pysam value
+  would silently iterate over string characters instead of alleles --
+  always parse GB via `merge._parse_pipe_values`, never index into it
+  directly.
 
 The micromamba environments referenced in `config.yaml` (clair3,
 whatshap-env, vamos, trgt, longtr, last_env, tandem-env) must already exist

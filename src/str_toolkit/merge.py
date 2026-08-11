@@ -137,17 +137,43 @@ def parse_trgt(vcf_path: Path) -> list[STRCall]:
     return calls
 
 
+def _parse_pipe_values(raw) -> list[float]:
+    """
+    Parses a LongTR FORMAT value that packs multiple per-allele numbers into
+    a single string joined by '|' (e.g. GB="-6|6721" for a heterozygous
+    call), rather than the usual VCF comma-separated convention -- CONFIRMED
+    on a real LongTR VCF line (C9orf72 locus, chr9:27573455). pysam returns
+    this as a plain string (or a 1-tuple wrapping one) since the field is
+    declared Number=1/Type=String in the header, not a numeric array --
+    naive iteration over it (e.g. `for x in sample_data["GB"]`) silently
+    iterates over characters instead of alleles. Always go through this
+    function to parse GB.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, (tuple, list)):
+        raw = "|".join(str(x) for x in raw if x is not None)
+    values = []
+    for chunk in str(raw).split("|"):
+        try:
+            values.append(float(chunk))
+        except ValueError:
+            continue
+    return values
+
+
 def parse_longtr(vcf_path: Path) -> list[STRCall]:
     """
     Reads the VCF produced by `LongTR` (--tr-vcf, bgzipped).
 
-    Fields used (confirmed in the official gymrek-lab/LongTR README):
-    INFO/MOTIF (locus motif), INFO/END, FORMAT/GB (bp difference of each
-    allele from the reference -- NOT an absolute length, unlike TRGT/AL).
-    As with tandem-genotypes, this value remains internally consistent
-    (control max / patient diff comparison within the same tool) even
-    though it is not directly comparable to the absolute lengths reported
-    by other tools.
+    Fields used (confirmed in the official gymrek-lab/LongTR README, and
+    verified against a real output line): INFO/MOTIF (locus motif),
+    INFO/END, FORMAT/GB (bp difference of each allele from the reference --
+    NOT an absolute length, unlike TRGT/AL; packed as "allele1|allele2",
+    see _parse_pipe_values). As with tandem-genotypes, this value remains
+    internally consistent (control max / patient diff comparison within
+    the same tool) even though it is not directly comparable to the
+    absolute lengths reported by other tools.
     """
     vcf_path = Path(vcf_path)
     if not vcf_path.exists():
@@ -162,8 +188,8 @@ def parse_longtr(vcf_path: Path) -> list[STRCall]:
             end = record.info.get("END", record.stop)
 
             for sample_name, sample_data in record.samples.items():
-                gb = sample_data.get("GB")  # bp diff vs reference per allele, e.g. (0, 12)
-                if gb is None:
+                gb = _parse_pipe_values(sample_data.get("GB"))  # bp diff vs reference per allele
+                if not gb:
                     continue
                 for i, bp_diff in enumerate(gb):
                     if bp_diff is None:

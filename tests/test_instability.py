@@ -187,7 +187,7 @@ def _write_longtr_vcf_with_allreads(path):
     header = pysam.VariantHeader()
     header.add_line('##INFO=<ID=MOTIF,Number=1,Type=String,Description="motif">')
     header.add_line('##INFO=<ID=END,Number=1,Type=Integer,Description="end">')
-    header.add_line('##FORMAT=<ID=GB,Number=.,Type=Integer,Description="bp diff vs reference">')
+    header.add_line('##FORMAT=<ID=GB,Number=1,Type=String,Description="bp diff vs reference">')
     header.add_line('##FORMAT=<ID=ALLREADS,Number=1,Type=String,Description="per-read bp diffs">')
     header.add_line('##contig=<ID=chr1,length=248956422>')
     header.add_sample("sample01")
@@ -196,7 +196,7 @@ def _write_longtr_vcf_with_allreads(path):
             contig="chr1", start=999, stop=1040, alleles=("N", "<STR>"),
             info={"MOTIF": "AAAG", "END": 1040},
         )
-        record.samples["sample01"]["GB"] = (-8, 4)
+        record.samples["sample01"]["GB"] = "-8|4"
         record.samples["sample01"]["ALLREADS"] = "-8|31;4|39;12|5"
         vf.write(record)
 
@@ -232,3 +232,48 @@ def test_compute_somatic_instability_end_to_end(tmp_path):
     assert df.iloc[0]["tool"] == "longtr"
     assert df.iloc[0]["is_mosaic"] == True
     assert df.iloc[0]["location_category"] == "subtelomeric"
+
+
+def test_parse_longtr_for_somatic_c9orf72_real_data(tmp_path):
+    """
+    Regression test on a real LongTR line for C9orf72 (chr9:27573455,
+    GCCCCG). GT="1|2", GB="-6|6721" (a 6bp contraction allele and a
+    ~1120-unit pathogenic expansion allele), ALLREADS="-11|1;-7|1;-6|6;
+    -4|2;6721|1" (11 reads total, matching INFO/DP=11). All the small
+    stutter-range reads (-11..-4) are within one motif unit (6bp) of the
+    -6 called allele, so this locus should NOT be flagged mosaic --
+    validates that detect_mosaicism does not mistake normal stutter noise
+    around a called allele for somatic mosaicism.
+    """
+    header = pysam.VariantHeader()
+    header.add_line('##INFO=<ID=MOTIF,Number=1,Type=String,Description="motif">')
+    header.add_line('##INFO=<ID=END,Number=1,Type=Integer,Description="end">')
+    header.add_line('##FORMAT=<ID=GB,Number=1,Type=String,Description="bp diff vs reference">')
+    header.add_line('##FORMAT=<ID=ALLREADS,Number=1,Type=String,Description="per-read bp diffs">')
+    header.add_line('##contig=<ID=chr9,length=138394717>')
+    header.add_sample("patient01")
+
+    uncompressed = tmp_path / "c9orf72.vcf"
+    with pysam.VariantFile(str(uncompressed), "w", header=header) as vf:
+        record = vf.new_record(
+            contig="chr9", start=27573454, stop=27573581,
+            alleles=("N", "<STR>"),
+            info={"MOTIF": "GCCCCG", "END": 27573581},
+        )
+        record.samples["patient01"]["GB"] = "-6|6721"
+        record.samples["patient01"]["ALLREADS"] = "-11|1;-7|1;-6|6;-4|2;6721|1"
+        vf.write(record)
+    vcf_path = tmp_path / "c9orf72.vcf.gz"
+    pysam.tabix_compress(str(uncompressed), str(vcf_path))
+
+    records = parse_longtr_for_somatic(vcf_path)
+    assert len(records) == 1
+    assert records[0]["called_alleles"] == [-6.0, 6721.0]
+    assert sorted(records[0]["allreads"]) == [(-11.0, 1), (-7.0, 1), (-6.0, 6), (-4.0, 2), (6721.0, 1)]
+
+    metrics = detect_mosaicism(
+        "GCCCCG", records[0]["called_alleles"], records[0]["allreads"], min_off_allele_reads=3
+    )
+    assert metrics["total_reads"] == 11  # matches INFO/DP=11 on the real line
+    assert metrics["is_mosaic"] is False
+    assert metrics["off_allele_reads"] == 0

@@ -202,11 +202,10 @@ def parse_longtr_for_somatic(vcf_path: Path) -> list[dict]:
             motif = str(merge._first(motif_field)).split(",")[0]
 
             for sample_name, sample_data in record.samples.items():
-                gb = sample_data.get("GB")
+                called_alleles = merge._parse_pipe_values(sample_data.get("GB"))
                 allreads_raw = sample_data.get("ALLREADS")
-                if gb is None or allreads_raw is None:
+                if not called_alleles or allreads_raw is None:
                     continue
-                called_alleles = [float(x) for x in gb if x is not None]
                 allreads = _parse_allreads(allreads_raw)
                 if not allreads:
                     continue
