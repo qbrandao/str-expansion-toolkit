@@ -274,21 +274,31 @@ line used for testing, so this remains unconfirmed. See the note in
 "Somatic (mitotic) instability" above.
 
 Output formats **confirmed** on real files:
+- VAMOS: `INFO/RU` (comma-separated candidate motifs, first one used),
+  `INFO/LEN_H1` (size in motif-repeat units) -- **confirmed on a real
+  VAMOS line for C9orf72 (chr9:27573415, LEN_H1=1123 units)**, cross-checked
+  against the LongTR regression for the same gene (GB=6721bp / 6bp motif ≈
+  1120 units -- consistent).
 - TRGT: `INFO/MOTIFS`, `FORMAT/AL` (allele lengths in bp).
 - tandem-genotypes: 8-column TSV (`chrom, start, end, motif, (ignored), .,
-  per-read lengths, .`). The per-read length column is split into 2 groups
+  forward-strand per-read values, reverse-strand per-read values`).
+  Columns 7 and 8 (index 6/7) are **confirmed** to both carry per-read
+  copy-number-change values when reverse-strand reads exist (real C9orf72
+  line, chr9:27573484) -- both are pooled into a single per-read list, not
+  just column 7 alone (an earlier bug silently dropped reverse-strand
+  reads whenever present). The pooled list is split into 2 groups
   (short/long allele) at the largest gap, and the median of each group is
-  taken as the allele size (bp). Since the TRF bed often lists several
-  overlapping candidate motifs for the same locus, these candidates are
-  deduplicated, keeping the one covered by the most reads.
+  taken as the allele size for this tool. Since the TRF bed often lists
+  several overlapping candidate motifs for the same locus, these
+  candidates are deduplicated, keeping the one covered by the most reads.
 - LongTR: `INFO/MOTIF`, `FORMAT/GB` and `FORMAT/ALLREADS` -- **confirmed on
-  a real LongTR line (C9orf72 locus, chr9:27573455)**. Both fields pack
-  their per-allele/per-read values into a single `|`-joined string (e.g.
-  `GB=-6|6721`), NOT the comma-separated array the VCF spec would suggest
-  for a multi-valued FORMAT field. Naive iteration over the raw pysam value
-  would silently iterate over string characters instead of alleles --
-  always parse GB via `merge._parse_pipe_values`, never index into it
-  directly.
+  two independent real LongTR lines (C9orf72, chr9:27573455; and a second
+  locus, chr3:194943234)**. Both fields pack their per-allele/per-read
+  values into a single `|`-joined string (e.g. `GB=-6|6721`), NOT the
+  comma-separated array the VCF spec would suggest for a multi-valued
+  FORMAT field. Naive iteration over the raw pysam value would silently
+  iterate over string characters instead of alleles -- always parse GB via
+  `merge._parse_pipe_values`, never index into it directly.
 
 The micromamba environments referenced in `config.yaml` (clair3,
 whatshap-env, vamos, trgt, longtr, last_env, tandem-env) must already exist

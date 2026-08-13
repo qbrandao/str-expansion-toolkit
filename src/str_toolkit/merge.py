@@ -254,15 +254,36 @@ def _merge_overlapping_tg_rows(rows: list[dict]) -> list[dict]:
     return kept
 
 
+def _parse_tg_read_list(raw: str) -> list[float]:
+    """Parses one of tandem-genotypes' per-strand read-value columns ('.' = no reads)."""
+    if not raw or raw == ".":
+        return []
+    values = []
+    for x in raw.split(","):
+        try:
+            values.append(float(x))
+        except ValueError:
+            continue
+    return values
+
+
 def _read_tandem_genotypes_rows(tsv_path: Path) -> list[dict]:
     """
     Shared row-reading logic for tandem-genotypes TSVs: parses the 8-column
     format and deduplicates overlapping candidate motifs (see
     _merge_overlapping_tg_rows). Returns one dict per locus with the RAW
-    per-read length list still intact (`values`) -- used both by
+    per-read value list still intact (`values`) -- used both by
     parse_tandem_genotypes (which reduces `values` to 2 allele sizes) and
     by str_toolkit.instability (which needs the raw per-read distribution
     for somatic mosaicism detection).
+
+    Columns 7 and 8 (index 6 and 7) are per-read values for the forward and
+    reverse strand respectively (per the tool's official documentation:
+    copy-number change of each read vs. the reference) -- CONFIRMED on a
+    real line with both columns populated (C9orf72 locus, chr9:27573484).
+    Earlier real examples showed column 8 as '.' (no reverse-strand reads)
+    with only column 7 populated; both are pooled here into a single
+    per-read list when present, so no read support is silently dropped.
     """
     tsv_path = Path(tsv_path)
     if not tsv_path.exists():
@@ -278,9 +299,11 @@ def _read_tandem_genotypes_rows(tsv_path: Path) -> list[dict]:
                 continue
             try:
                 chrom, start, end, motif = cols[0], int(cols[1]), int(cols[2]), cols[3]
-                values = [float(x) for x in cols[6].split(",") if x]
             except ValueError:
                 continue
+            fwd_values = _parse_tg_read_list(cols[6])
+            rev_values = _parse_tg_read_list(cols[7]) if len(cols) > 7 else []
+            values = fwd_values + rev_values
             if not values:
                 continue
             rows.append({"chrom": chrom, "start": start, "end": end, "motif": motif, "values": values})
@@ -296,14 +319,15 @@ def parse_tandem_genotypes(tsv_path: Path) -> list[STRCall]:
     depending on the official docs -- ambiguous on our files, values like
     2.8/18.8 that do not look like a gene name) is IGNORED, not used:
       0 chrom, 1 start, 2 end, 3 motif, 4 (ignored), 5 '.',
-      6 per-read lengths (bp, comma-separated), 7 '.'
+      6 per-read values, forward strand, 7 per-read values, reverse strand
 
-    Column 6 is a list of repeat lengths measured per individual read --
-    it is split into 2 groups (short/long allele, see _split_two_alleles),
-    whose median is taken as the allele size in bp (comparable to
-    TRGT/AL). Overlapping candidate motifs (from repeats.trf.bed) are
-    deduplicated, keeping the one covered by the most reads (see
-    _merge_overlapping_tg_rows).
+    Columns 6 and 7 are per-read copy-number changes vs. the reference,
+    forward and reverse strand respectively (per the tool's official
+    documentation) -- pooled together (see _read_tandem_genotypes_rows),
+    then split into 2 groups (short/long allele, see _split_two_alleles),
+    whose median is taken as the allele size for this tool. Overlapping
+    candidate motifs (from repeats.trf.bed) are deduplicated, keeping the
+    one covered by the most reads (see _merge_overlapping_tg_rows).
     """
     calls = []
     for row in _read_tandem_genotypes_rows(tsv_path):

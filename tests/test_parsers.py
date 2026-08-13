@@ -1,7 +1,7 @@
 import pysam
 import pytest
 
-from str_toolkit.merge import _merge_overlapping_tg_rows, _split_two_alleles, parse_longtr, parse_tandem_genotypes, parse_trgt
+from str_toolkit.merge import _merge_overlapping_tg_rows, _read_tandem_genotypes_rows, _split_two_alleles, parse_longtr, parse_tandem_genotypes, parse_trgt, parse_vamos
 
 TG_SAMPLE_LINES = [
     "chr1\t231799889\t231799934\tTCCCTTCCTCCCTTCC\t2.8\t.\t259,267,269,271,272,318,318,319\t.\n",
@@ -152,3 +152,94 @@ def test_parse_longtr_c9orf72_real_data(tmp_path):
     assert all(c.motif == "GCCCCG" for c in calls)
     sizes = sorted(c.size for c in calls)
     assert sizes == [-6.0, 6721.0]  # a 6bp contraction allele and a ~1120-unit pathogenic expansion
+
+
+def test_parse_longtr_second_real_locus_confirms_pipe_format(tmp_path):
+    """
+    Second independent real LongTR line (different locus, chr3:194943234,
+    28bp motif, all-positive GB="1004|1350", 21 reads split 10/11 between
+    strands). Confirms the pipe-separated GB/ALLREADS format is consistent
+    across loci, not a one-off for the first (C9orf72) regression test.
+    """
+    header = pysam.VariantHeader()
+    header.add_line('##INFO=<ID=MOTIF,Number=1,Type=String,Description="motif">')
+    header.add_line('##INFO=<ID=END,Number=1,Type=Integer,Description="end">')
+    header.add_line('##FORMAT=<ID=GB,Number=1,Type=String,Description="bp diff vs reference">')
+    header.add_line('##contig=<ID=chr3,length=198295559>')
+    header.add_sample("patient01")
+
+    uncompressed = tmp_path / "locus2.vcf"
+    with pysam.VariantFile(str(uncompressed), "w", header=header) as vf:
+        record = vf.new_record(
+            contig="chr3", start=194943233, stop=194943717,
+            alleles=("N", "<STR>"),
+            info={"MOTIF": "CCACACTCTCCCACACTCTCCCACTCTC", "END": 194943717},
+        )
+        record.samples["patient01"]["GB"] = "1004|1350"
+        vf.write(record)
+    vcf_path = tmp_path / "locus2.vcf.gz"
+    pysam.tabix_compress(str(uncompressed), str(vcf_path))
+
+    calls = parse_longtr(vcf_path)
+    assert len(calls) == 2
+    assert sorted(c.size for c in calls) == [1004.0, 1350.0]
+
+
+def _write_vamos_c9orf72_vcf(path):
+    header = pysam.VariantHeader()
+    header.add_line('##INFO=<ID=END,Number=1,Type=Integer,Description="end">')
+    header.add_line('##INFO=<ID=RU,Number=1,Type=String,Description="repeat units">')
+    header.add_line('##INFO=<ID=LEN_H1,Number=1,Type=Integer,Description="length in motif units">')
+    header.add_line('##contig=<ID=chr9,length=138394717>')
+    header.add_sample("patient01")
+    with pysam.VariantFile(str(path), "w", header=header) as vf:
+        record = vf.new_record(
+            contig="chr9", start=27573414, stop=27573546,
+            alleles=("N", "<VNTR>"),
+            info={
+                "END": 27573546,
+                "RU": "GGCCCC,GCCCC,GGGCCC,GCCCCC,GGCACCGC,AACCGC,TCACTC,ACCCACTC,"
+                      "GCCACC,TGCGCC,GCGCCTCC,GCGCGCC,GGCGCA,GACCAC",
+                "LEN_H1": 1123,
+            },
+        )
+        vf.write(record)
+
+
+def test_parse_vamos_c9orf72_real_data(tmp_path):
+    """
+    Regression test from a real VAMOS line for C9orf72 (chr9:27573415).
+    RU lists 14 candidate motifs (comma-separated) -- only the first
+    ("GGCCCC") is used as the locus motif. LEN_H1=1123 (repeat-motif
+    units, not bp) is consistent with the LongTR regression test for the
+    same gene (GB=6721bp / 6bp motif ~= 1120 units) -- cross-tool sanity
+    check that VAMOS's unit convention (motif-repeat units) is correctly
+    understood.
+    """
+    hap1_vcf = tmp_path / "patient01_assembly.hap1.vcf"
+    _write_vamos_c9orf72_vcf(hap1_vcf)
+
+    calls = parse_vamos({"hap1": hap1_vcf})
+    assert len(calls) == 1
+    assert calls[0].motif == "GGCCCC"
+    assert calls[0].size == 1123.0
+    assert calls[0].chrom == "chr9"
+
+
+def test_parse_tandem_genotypes_pools_forward_and_reverse_strand_reads(tmp_path):
+    """
+    Regression test from a real tandem-genotypes line for C9orf72
+    (chr9:27573484). Unlike earlier examples where column 8 (reverse
+    strand) was always '.', this line has real data in BOTH column 7
+    (forward strand) and column 8 (reverse strand) -- confirms both must
+    be parsed and pooled, not just column 7 alone.
+    """
+    tsv_path = tmp_path / "sample.tandem_genotypes.tsv"
+    tsv_path.write_text(
+        "chr9\t27573484\t27573546\tGCCCCG\t10.8\t.\t"
+        "-1,-1,-1,-1,-1,0,2,2,2,2,2\t-2,-1,-1,-1,2,2,2,2,2,3\n"
+    )
+
+    rows = _read_tandem_genotypes_rows(tsv_path)
+    assert len(rows) == 1
+    assert len(rows[0]["values"]) == 21  # 11 forward + 10 reverse reads pooled
