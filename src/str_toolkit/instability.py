@@ -40,11 +40,14 @@ logger = logging.getLogger(__name__)
 
 VALID_DUO_TYPES = {"mother_son", "mother_daughter", "father_son", "father_daughter"}
 
-# LongTR's ALLREADS field may include a sentinel bucket for reads that could
-# not be confidently placed (observed as "-999" in HipSTR-family tutorials,
-# HipSTR being LongTR's short-read ancestor). NOT yet confirmed against a
-# real LongTR output file -- verify and adjust this threshold once you have
-# one, e.g. via `bcftools view sample.longtr.vcf.gz | grep ALLREADS`.
+# LongTR's ALLREADS field may in principle include a sentinel bucket for
+# reads that could not be confidently placed (observed as "-999" in
+# HipSTR-family tutorials, HipSTR being LongTR's short-read ancestor).
+# CHECKED against real LongTR output (multiple loci, including a large
+# pathogenic expansion at C9orf72 with a 6721bp allele) -- no such sentinel
+# value was observed. Kept as a defensive safeguard against future/other
+# LongTR versions rather than removed: real bp-diff values seen so far
+# range from -11 to 6721, so a -900 cutoff does not affect any genuine data.
 ALLREADS_SENTINEL_THRESHOLD = -900
 
 

@@ -238,12 +238,12 @@ only called mosaic if `--min-off-allele-reads` (default 3) reads support
 the same off-allele size, to avoid single-read sequencing errors being
 counted as instability.
 
-⚠️ The LongTR `FORMAT/ALLREADS` parser excludes a sentinel bucket inferred
+The LongTR `FORMAT/ALLREADS` parser excludes a sentinel bucket inferred
 from HipSTR-family tutorials (`bp_diff <= -900`, LongTR's short-read
-ancestor) for reads that could not be confidently placed. This has **not**
-been confirmed against a real LongTR output file -- check with
-`bcftools view sample.longtr.vcf.gz | grep ALLREADS` and adjust
-`ALLREADS_SENTINEL_THRESHOLD` in `instability.py` if needed.
+ancestor) for reads that could not be confidently placed. **Checked
+against real LongTR output (multiple loci) and no such sentinel value was
+observed** -- kept as a defensive safeguard only; real bp-diff values seen
+so far (-11 to 6721) are unaffected by this cutoff.
 
 ## Sample file format
 
@@ -266,12 +266,9 @@ VNTR repertoire, classified by genomic location and motif),
 and `somatic-instability` (per-read mosaicism detection via LongTR
 ALLREADS and tandem-genotypes raw read lengths).
 
-⚠️ LongTR's GB and ALLREADS field FORMAT (pipe-separated values) is now
-confirmed on real data (see below). The ALLREADS sentinel value handling
-(reads that could not be confidently placed) is still inferred from
-HipSTR-family documentation only -- no sentinel value appeared in the real
-line used for testing, so this remains unconfirmed. See the note in
-"Somatic (mitotic) instability" above.
+All four tools' output formats are confirmed against real data (see below),
+including LongTR's GB/ALLREADS pipe-separated encoding and its (absent, but
+defensively handled) sentinel value.
 
 Output formats **confirmed** on real files:
 - VAMOS: `INFO/RU` (comma-separated candidate motifs, first one used),
