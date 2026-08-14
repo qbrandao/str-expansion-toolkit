@@ -9,6 +9,7 @@ from str_toolkit.instability import (
     compute_meiotic_instability,
     compute_somatic_instability,
     detect_mosaicism,
+    is_sex_chromosome,
     match_transmitted_alleles,
     parse_longtr_for_somatic,
     read_duos,
@@ -91,6 +92,69 @@ def test_compute_meiotic_instability_end_to_end(tmp_path):
     # child allele 21 -> nearest parent allele 20 (diff=1); child allele 30 -> nearest parent 22 (diff=8)
     diffs = sorted(df["diff"].tolist())
     assert diffs == [1.0, 8.0]
+
+
+def test_is_sex_chromosome():
+    assert is_sex_chromosome("chrX") is True
+    assert is_sex_chromosome("chrY") is True
+    assert is_sex_chromosome("X") is True
+    assert is_sex_chromosome("Y") is True
+    assert is_sex_chromosome("chr1") is False
+    assert is_sex_chromosome("chr22") is False
+
+
+def test_meiotic_instability_excludes_sex_chromosomes_by_default(tmp_path):
+    data_dir = tmp_path / "data"
+    _write_merged_vcf(
+        data_dir / "father" / "father.merged.vcf",
+        [
+            _locus("chr1", 5000, "AAAG", {"vamos_hap1": 20}),
+            _locus("chrX", 5000, "AAAG", {"vamos_hap1": 20}),
+            _locus("chrY", 5000, "AAAG", {"vamos_hap1": 20}),
+        ],
+    )
+    _write_merged_vcf(
+        data_dir / "son" / "son.merged.vcf",
+        [
+            _locus("chr1", 5000, "AAAG", {"vamos_hap1": 25}),
+            _locus("chrX", 5000, "AAAG", {"vamos_hap1": 25}),
+            _locus("chrY", 5000, "AAAG", {"vamos_hap1": 25}),
+        ],
+    )
+
+    duos = [{"duo_id": "D1", "parent_id": "father", "child_id": "son", "duo_type": "father_son"}]
+    genes_bed = _make_empty_bed_gz(tmp_path / "genes.bed.gz")
+    exons_bed = _make_empty_bed_gz(tmp_path / "exons.bed.gz")
+
+    df = compute_meiotic_instability(data_dir, duos, str(genes_bed), str(exons_bed))
+    assert set(df["chrom"]) == {"chr1"}  # X and Y dropped by default
+
+
+def test_meiotic_instability_can_include_sex_chromosomes(tmp_path):
+    data_dir = tmp_path / "data"
+    _write_merged_vcf(
+        data_dir / "father" / "father.merged.vcf",
+        [
+            _locus("chr1", 5000, "AAAG", {"vamos_hap1": 20}),
+            _locus("chrX", 5000, "AAAG", {"vamos_hap1": 20}),
+        ],
+    )
+    _write_merged_vcf(
+        data_dir / "son" / "son.merged.vcf",
+        [
+            _locus("chr1", 5000, "AAAG", {"vamos_hap1": 25}),
+            _locus("chrX", 5000, "AAAG", {"vamos_hap1": 25}),
+        ],
+    )
+
+    duos = [{"duo_id": "D1", "parent_id": "father", "child_id": "son", "duo_type": "father_son"}]
+    genes_bed = _make_empty_bed_gz(tmp_path / "genes.bed.gz")
+    exons_bed = _make_empty_bed_gz(tmp_path / "exons.bed.gz")
+
+    df = compute_meiotic_instability(
+        data_dir, duos, str(genes_bed), str(exons_bed), exclude_sex_chromosomes=False
+    )
+    assert set(df["chrom"]) == {"chr1", "chrX"}
 
 
 def test_compute_meiotic_instability_no_shared_loci_returns_empty(tmp_path):

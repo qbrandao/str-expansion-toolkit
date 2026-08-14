@@ -57,3 +57,25 @@ def test_compare_parses():
     assert args.patients_dir == "results/patients"
     assert args.format == "tsv"
     assert args.threshold == 0
+
+
+def test_meiotic_instability_excludes_sex_chromosomes_by_default():
+    parser = build_parser()
+    args = parser.parse_args([
+        "meiotic-instability",
+        "--duos", "duos.tsv", "--data-dir", "results/",
+        "--genes-bed", "genes.bed.gz", "--exons-bed", "exons.bed.gz",
+        "-o", "out.tsv",
+    ])
+    assert args.include_sex_chromosomes is False
+
+
+def test_meiotic_instability_include_sex_chromosomes_flag():
+    parser = build_parser()
+    args = parser.parse_args([
+        "meiotic-instability",
+        "--duos", "duos.tsv", "--data-dir", "results/",
+        "--genes-bed", "genes.bed.gz", "--exons-bed", "exons.bed.gz",
+        "-o", "out.tsv", "--include-sex-chromosomes",
+    ])
+    assert args.include_sex_chromosomes is True

@@ -40,6 +40,19 @@ logger = logging.getLogger(__name__)
 
 VALID_DUO_TYPES = {"mother_son", "mother_daughter", "father_son", "father_daughter"}
 
+# Sex chromosomes are excluded from meiotic instability analysis by default.
+# The nearest-size matching of match_transmitted_alleles assumes both parent
+# and child carry two comparable alleles at a locus, which does not hold on X
+# or Y whenever either member of the duo is hemizygous there (e.g. a son is
+# hemizygous for X and carries a single Y inherited from his father). Treating
+# such loci like autosomes would produce spurious parent-child "differences"
+# that reflect ploidy rather than repeat instability.
+SEX_CHROMOSOMES = {"chrX", "chrY", "X", "Y", "chrx", "chry"}
+
+
+def is_sex_chromosome(chrom: str) -> bool:
+    return str(chrom).strip() in SEX_CHROMOSOMES or str(chrom).strip().lower() in {"chrx", "chry", "x", "y"}
+
 # LongTR's ALLREADS field may in principle include a sentinel bucket for
 # reads that could not be confidently placed (observed as "-999" in
 # HipSTR-family tutorials, HipSTR being LongTR's short-read ancestor).
@@ -87,6 +100,7 @@ def compute_meiotic_instability(
     genes_bed: str,
     exons_bed: str,
     promoter_bp: int = DEFAULT_PROMOTER_WINDOW_BP,
+    exclude_sex_chromosomes: bool = True,
 ) -> pd.DataFrame:
     data_dir = Path(data_dir)
     dict_genes = load_genes(genes_bed)
@@ -104,6 +118,16 @@ def compute_meiotic_instability(
         shared_loci = set(parent_loci) & set(child_loci)
         if not shared_loci:
             logger.warning("Duo %s: no shared loci between %s and %s", duo_id, parent_id, child_id)
+
+        if exclude_sex_chromosomes:
+            n_before = len(shared_loci)
+            shared_loci = {lid for lid in shared_loci if not is_sex_chromosome(parent_loci[lid]["chrom"])}
+            n_excluded = n_before - len(shared_loci)
+            if n_excluded:
+                logger.info(
+                    "Duo %s: excluded %d sex-chromosome loci (%d autosomal loci retained)",
+                    duo_id, n_excluded, len(shared_loci),
+                )
 
         for locus_id in shared_loci:
             p_rec, c_rec = parent_loci[locus_id], child_loci[locus_id]
@@ -301,7 +325,14 @@ def run_meiotic(args) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     duos = read_duos(args.duos)
-    df = compute_meiotic_instability(args.data_dir, duos, args.genes_bed, args.exons_bed, args.promoter_bp)
+    df = compute_meiotic_instability(
+        args.data_dir,
+        duos,
+        args.genes_bed,
+        args.exons_bed,
+        args.promoter_bp,
+        exclude_sex_chromosomes=not args.include_sex_chromosomes,
+    )
 
     sep = "," if args.format == "csv" else "\t"
     output_path = Path(args.output)

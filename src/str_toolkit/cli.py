@@ -222,6 +222,18 @@ def build_parser() -> argparse.ArgumentParser:
         "the correct unit of replication for comparing duo types, see instability.py docstring.",
     )
     p_meiotic.add_argument("--format", choices=["tsv", "csv"], default="tsv", help="Output format.")
+    sex_chrom_group = p_meiotic.add_mutually_exclusive_group()
+    sex_chrom_group.add_argument(
+        "--exclude-sex-chromosomes", dest="include_sex_chromosomes", action="store_false",
+        help="Exclude X/Y loci (DEFAULT). Nearest-size allele matching assumes two comparable "
+        "alleles per locus in both duo members, which fails wherever either is hemizygous "
+        "(e.g. a son on X and Y), producing ploidy artefacts rather than instability.",
+    )
+    sex_chrom_group.add_argument(
+        "--include-sex-chromosomes", dest="include_sex_chromosomes", action="store_true",
+        help="Keep X/Y loci in the analysis. Only appropriate if hemizygosity is handled downstream.",
+    )
+    p_meiotic.set_defaults(include_sex_chromosomes=False)
     p_meiotic.set_defaults(func=instability.run_meiotic)
 
     # ---------------------------------------------------------------

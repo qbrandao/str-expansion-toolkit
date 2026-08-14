@@ -195,6 +195,14 @@ str-toolkit meiotic-instability \
 `parent_id` and `child_id` must have already been run through `detect`
 (`{data-dir}/{id}/{id}.merged.vcf`).
 
+**Sex chromosomes are excluded by default.** Nearest-size allele matching
+assumes both duo members carry two comparable alleles at a locus, which
+fails wherever either is hemizygous — a son is hemizygous for X and carries
+a single Y — so X/Y loci would otherwise yield ploidy artefacts rather than
+instability estimates. The number of excluded loci is logged per duo. Pass
+`--include-sex-chromosomes` to keep them, only if hemizygosity is handled
+downstream.
+
 For each duo and each locus shared between parent and child, each child
 allele is matched to its nearest-sized parental allele (a standard
 simplification -- not true parent-of-origin phasing), and the size
