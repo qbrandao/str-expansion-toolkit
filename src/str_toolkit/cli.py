@@ -1,7 +1,7 @@
 """
 Entry point for the `str-toolkit` CLI.
 
-Six subcommands:
+Seven subcommands:
   1) detect               : runs VAMOS + tandem-genotypes + LongTR (TRGT
                              opt-in) for one or more samples, merges the
                              outputs into a final VCF.
@@ -17,6 +17,8 @@ Six subcommands:
                              duos (nearest-size allele matching).
   6) somatic-instability    : somatic (mosaic) instability from per-read
                              heterogeneity within single samples.
+  7) validate-truthset      : empirical false-positive rate of the meiotic
+                             calls, against the Platinum Pedigree TR truthset.
 
 Usage:
   str-toolkit detect --sample p01 --bam p01.sorted.bam --fastq p01.merged.fastq.gz \
@@ -40,7 +42,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from str_toolkit import detect, controls, compare, repertoire, instability
+from str_toolkit import detect, controls, compare, repertoire, instability, truthset
 from str_toolkit.annotate import DEFAULT_PROMOTER_WINDOW_BP
 
 
@@ -269,6 +271,45 @@ def build_parser() -> argparse.ArgumentParser:
     p_somatic.add_argument("-o", "--output", required=True, help="Per-locus output (TSV/CSV).")
     p_somatic.add_argument("--format", choices=["tsv", "csv"], default="tsv", help="Output format.")
     p_somatic.set_defaults(func=instability.run_somatic)
+
+    # ---------------------------------------------------------------
+    # 7) validate-truthset
+    # ---------------------------------------------------------------
+    p_truth = subparsers.add_parser(
+        "validate-truthset",
+        help="Validate meiotic instability calls against the Platinum Pedigree TR truthset.",
+    )
+    p_truth.add_argument(
+        "--truthset", required=True,
+        help="Platinum Pedigree TR truthset VCF (ceph_1463_tandem_repeats.oa.vcf.gz).",
+    )
+    p_truth.add_argument(
+        "--inspect", action="store_true",
+        help="Report the INFO/FORMAT fields present in the truthset and exit. "
+        "Run this first to confirm field names rather than assuming them.",
+    )
+    p_truth.add_argument(
+        "--instability",
+        help="Per-locus output of `meiotic-instability` (required unless --inspect).",
+    )
+    p_truth.add_argument(
+        "--window", type=int, default=25,
+        help="Interval tolerance (bp) for matching our loci to truthset loci (default: 25, "
+        "matching the merge step, since the truthset does not share our coordinate convention).",
+    )
+    p_truth.add_argument(
+        "--ignore-motif", action="store_true",
+        help="Match on position only, ignoring motif identity.",
+    )
+    p_truth.add_argument(
+        "--tolerance", type=float, default=0.0,
+        help="Parent-child size differences with absolute value above this are counted as "
+        "apparent false positives at truthset loci (default: 0).",
+    )
+    p_truth.add_argument("-o", "--output", required=True, help="Instability table annotated with in_truthset.")
+    p_truth.add_argument("--summary", help="Optional: per-tool false-positive rate summary.")
+    p_truth.add_argument("--format", choices=["tsv", "csv"], default="tsv", help="Input/output format.")
+    p_truth.set_defaults(func=truthset.run)
 
     return parser
 

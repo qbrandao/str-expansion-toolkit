@@ -253,6 +253,41 @@ against real LongTR output (multiple loci) and no such sentinel value was
 observed** -- kept as a defensive safeguard only; real bp-diff values seen
 so far (-11 to 6721) are unaffected by this cutoff.
 
+### 7) Validate against the Platinum Pedigree TR truthset
+
+```bash
+# Download once
+aws s3 cp --no-sign-request \
+  s3://platinum-pedigree-data/variants/tr_truthset/GRCh38/ceph_1463_tandem_repeats.oa.vcf.gz \
+  references/
+
+# Confirm which INFO field carries the motif before trusting any matching
+str-toolkit validate-truthset --truthset references/ceph_1463_tandem_repeats.oa.vcf.gz \
+  --inspect -o /dev/null
+
+str-toolkit validate-truthset \
+  --truthset references/ceph_1463_tandem_repeats.oa.vcf.gz \
+  --instability results/meiotic_instability.tsv \
+  -o results/meiotic_instability.truthset_annotated.tsv \
+  --summary results/truthset_false_positive_rate.tsv
+```
+
+The Platinum Pedigree truthset (Kronenberg et al., Nat Methods 2025) is not
+a list of de novo mutations. It is a set of tandem repeat genotypes retained
+because they segregate consistently with Mendelian inheritance across CEPH
+1463. At those loci transmission is therefore known to be consistent, so a
+parent-to-child size difference called by `meiotic-instability` is most
+likely a false positive. The per-tool `apparent_fp_rate` in the summary is
+an **upper bound** on the false-positive rate of the nearest-size
+transmitted-allele assignment: a locus may still be genuinely unstable and
+pass the pedigree filters.
+
+Loci are matched to the truthset with the same interval tolerance used at
+the merge step (`--window`, 25 bp by default), since the truthset does not
+share the coordinate convention of any single caller. Motifs are compared
+after canonicalization; if the truthset carries no usable motif field the
+matching falls back to position only and logs a warning.
+
 ## Sample file format
 
 TSV file with a header, used by `--samples-list` in `detect` (`bam_path`
@@ -271,8 +306,9 @@ TRGT opt-in, + multi-tool merging), `build-controls`, `compare` (per-tool
 registry and diffs, gene/feature annotation), `repertoire` (genome-wide
 VNTR repertoire, classified by genomic location and motif),
 `meiotic-instability` (parent-offspring duos, nearest-size allele matching),
-and `somatic-instability` (per-read mosaicism detection via LongTR
-ALLREADS and tandem-genotypes raw read lengths).
+`somatic-instability` (per-read mosaicism detection via LongTR ALLREADS and
+tandem-genotypes raw read lengths), and `validate-truthset` (empirical
+false-positive rate against the Platinum Pedigree TR truthset).
 
 All four tools' output formats are confirmed against real data (see below),
 including LongTR's GB/ALLREADS pipe-separated encoding and its (absent, but

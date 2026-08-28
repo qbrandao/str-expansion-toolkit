@@ -1,0 +1,5 @@
+duo_id	parent_id	child_id	duo_type
+CEPH_pat_79	NA12877	NA12879	father_daughter
+CEPH_pat_82	NA12877	NA12882	father_son
+CEPH_mat_79	NA12878	NA12879	mother_daughter
+CEPH_mat_82	NA12878	NA12882	mother_son
