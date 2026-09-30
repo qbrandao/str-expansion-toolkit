@@ -47,6 +47,10 @@ class LongTRConfig:
 @dataclass
 class Config:
     reference: str = ""
+    # Optional micromamba environment providing samtools, used for the input
+    # inspection and conversion steps that belong to no single tool. Left
+    # empty, samtools is taken from the current PATH.
+    samtools_env: str = ""
     vamos: VamosConfig = field(default_factory=VamosConfig)
     trgt: TrgtConfig = field(default_factory=TrgtConfig)
     tandem_genotypes: TandemGenotypesConfig = field(default_factory=TandemGenotypesConfig)
@@ -59,6 +63,7 @@ class Config:
 
         return cls(
             reference=raw.get("reference", ""),
+            samtools_env=raw.get("samtools_env", ""),
             vamos=VamosConfig(**raw.get("vamos", {})),
             trgt=TrgtConfig(**raw.get("trgt", {})),
             tandem_genotypes=TandemGenotypesConfig(**raw.get("tandem_genotypes", {})),

@@ -11,6 +11,11 @@
 
 reference: /home/user/scripts/GRCh38-GIABv3_std.fa
 
+# Optional: environment providing samtools, used to index an input BAM that
+# has no index and to extract a FASTQ from a BAM when none is supplied.
+# Comment this out to take samtools from the current PATH instead.
+samtools_env: vamos
+
 vamos:
   env_clair3: clair3
   env_whatshap: whatshap-env

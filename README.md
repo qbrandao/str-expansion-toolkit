@@ -38,6 +38,11 @@ cp config.example.yaml config.yaml
 # edit config.yaml with your own paths
 ```
 
+The optional `samtools_env` key names the environment providing samtools for
+the two steps that belong to no single tool: indexing an input BAM that has no
+index, and extracting a FASTQ from a BAM when none is supplied. Left out,
+samtools is taken from the current `PATH`.
+
 ## Usage
 
 ### 1) Detect expansions in one or more patients
@@ -65,11 +70,46 @@ str-toolkit detect \
   -o results/patients/
 ```
 
-- `--bam`: already-aligned BAM, used by VAMOS (clair3 + whatshap + vamos --contig).
-- `--fastq`: raw merged fastq(.gz), used by TRGT/LongTR (minimap2 alignment,
-  `map-ont` preset) and tandem-genotypes (last-train/lastal). TRGT and
-  LongTR automatically reuse the same `.sorted.bam` if both run in the
-  same job (no duplicate alignment).
+#### Inputs: a BAM, a FASTQ, or both
+
+Either input is sufficient on its own.
+
+- `--bam`: an already-aligned, coordinate-sorted BAM. Read directly by VAMOS
+  (clair3 + whatshap + `vamos --contig`), and reused as is by LongTR and TRGT,
+  with no realignment. This assumes it was aligned to the `reference` given in
+  `config.yaml`.
+- `--fastq`: raw merged fastq(.gz). Needed by tandem-genotypes
+  (last-train/lastal), which realigns the reads itself, and used to produce the
+  alignment when no BAM is given. LongTR and TRGT share that single
+  `.sorted.bam` when both run in the same job, so nothing is aligned twice.
+- **BAM alone**: the reads tandem-genotypes needs are extracted from the BAM
+  once (primary alignments only, `MM`/`ML` methylation tags kept) and reused.
+- **Both**: the FASTQ wins wherever reads are needed, which is the better
+  option. Reads extracted from an aligned BAM are missing anything that failed
+  to align, and LAST would never see them.
+- `--realign`: ignores `--bam` for the alignment-based tools and realigns from
+  the FASTQ with `minimap2 -ax map-ont -Y`. Use it when the input BAM comes from
+  another reference build, another aligner, or an unsuitable preset.
+
+An input BAM with no index is never indexed in place, since it often sits in a
+read-only or shared directory: it is symlinked into the sample output directory
+and the symlink is indexed instead.
+
+Before running any of this on a BAM whose provenance is not fully known, triage
+it first:
+
+```bash
+./scripts/inspect_bam.sh /path/to/sample.bam /path/to/reference.fa > bam_report.txt
+```
+
+The report settles whether the file is long-read data at all, which reference
+build and contig naming it uses, whether the chemistry is R9.4.1 or R10.4.1
+(from the header, and independently from the observed error rate), the depth,
+and whether it is whole genome or targeted. It reads only the header, the index
+summary and a bounded sample of reads, so it is cheap enough to run on a login
+node. See `scripts/README.md` for how to act on each finding, and
+`scripts/12_test_new_bam_longtr.sbatch` then
+`scripts/13_test_new_bam_full.sbatch` for the two test runs that follow.
 
 Runs the selected tools for each sample (with fault tolerance: steps whose
 output already exists are skipped), then merges the outputs into a summary

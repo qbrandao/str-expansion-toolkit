@@ -68,8 +68,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--samples-list",
         help="TSV file with columns: sample_id, bam_path, fastq_path (one sample per line).",
     )
-    p_detect.add_argument("--bam", help="Already-aligned BAM (used by VAMOS/clair3).")
-    p_detect.add_argument("--fastq", help="Raw merged fastq(.gz) (used by TRGT/LongTR and tandem-genotypes).")
+    p_detect.add_argument(
+        "--bam",
+        help="Already-aligned, coordinate-sorted BAM. Used directly by VAMOS/clair3, and "
+        "reused as is by LongTR and TRGT unless --realign is given. Sufficient on its own: "
+        "when no --fastq is supplied, the reads tandem-genotypes needs are extracted from "
+        "this BAM.",
+    )
+    p_detect.add_argument(
+        "--fastq",
+        help="Raw merged fastq(.gz). Required only when no --bam is given, or with "
+        "--realign. Takes precedence over extracting reads from the BAM.",
+    )
     p_detect.add_argument(
         "--config",
         required=True,
@@ -85,6 +95,15 @@ def build_parser() -> argparse.ArgumentParser:
         "ONT-native). TRGT is NOT run by default: it has no official support for ONT "
         "data (designed for PacBio HiFi); it only runs if explicitly requested here, "
         "e.g. --tools vamos trgt tandem-genotypes longtr.",
+    )
+    p_detect.add_argument(
+        "--realign",
+        action="store_true",
+        help="Ignore --bam for the alignment-based tools and realign the reads from "
+        "--fastq with minimap2 (-ax map-ont -Y). Without this flag, a BAM given via "
+        "--bam is reused as is, which assumes it was aligned to the same reference as "
+        "'reference' in config.yaml. Use --realign when the input BAM comes from "
+        "another reference build, another aligner, or an unsuitable preset.",
     )
     p_detect.add_argument("--threads", type=int, default=4)
     p_detect.set_defaults(func=detect.run)

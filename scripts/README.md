@@ -35,6 +35,12 @@ chain everything at once with `./scripts/submit_full_pipeline.sh`.
 | `08_detect_ceph_array.sbatch` | `detect` on the CEPH 1463 quartet | 16 CPU / 64G / 24h, x4 |
 | `09_meiotic_instability.sbatch` | germline instability from CEPH duos | 4 CPU / 16G / 2h |
 | `10_somatic_instability.sbatch` | per-read mosaicism across the cohort | 4 CPU / 32G / 4h |
+| `11_validate_truthset.sbatch` | comparison against the Platinum Pedigree TR truthset | 4 CPU / 16G / 2h |
+| `12_test_new_bam_longtr.sbatch` | fast check of a newly received BAM, LongTR alone | 8 CPU / 32G / 6h |
+| `13_test_new_bam_full.sbatch` | full three-tool run on that same BAM | 16 CPU / 64G / 36h |
+
+`inspect_bam.sh` is not a SLURM script: see "Testing a newly received BAM"
+below.
 
 ## Germline instability: duo definition
 
@@ -69,6 +75,78 @@ independent observations would be pseudo-replication.
 6. `06_compare.sbatch` — after `04` and `05`
 7. `09_meiotic_instability.sbatch` — after `08`
 8. `10_somatic_instability.sbatch` — after the relevant detect jobs (see below)
+
+## Testing a newly received BAM
+
+A BAM from a sequencing provider or a collaborator is often the only input
+available, with no FASTQ and no reliable description of how it was produced.
+Three steps, in order.
+
+**1. Triage, on the login node, well under a minute.**
+
+```bash
+./scripts/inspect_bam.sh /path/to/sample.bam /path/to/reference.fa > bam_report.txt
+```
+
+The second argument is optional and is the reference from `config.yaml`. Given
+it, the report also compares the BAM contigs against the reference index, which
+is the quickest way to catch a build mismatch. The report reads the header, the
+index summary and a bounded sample of reads, so it is cheap enough for a login
+node. Read sections 1, 2, 4 and 6 first:
+
+| Finding | What it means |
+|---|---|
+| section 1, not coordinate-sorted | sort it before anything else |
+| section 2, another build | pass `--realign`, which needs a FASTQ |
+| section 2, contig naming differs from the catalogs | fix the catalogs, never the BAM |
+| section 4, error rate at or above 3 percent | R9.4.1, so use an R9 clair3 model |
+| section 4, mean read length under 500 bp | not long-read data, stop here |
+| section 6, targeted | a genome-wide repertoire run is not meaningful |
+
+**2. Fast single-tool check.**
+
+```bash
+sbatch scripts/12_test_new_bam_longtr.sbatch
+```
+
+LongTR alone on the BAM as it stands: no realignment, no clair3, no LAST. It
+reports how many catalog loci were actually genotyped, which is what catches a
+contig naming mismatch or insufficient depth before hours are spent on the slow
+stages.
+
+**3. Full run.**
+
+```bash
+sbatch scripts/13_test_new_bam_full.sbatch
+```
+
+All three default tools plus the merge, and it prints how many loci ended up
+supported by one, two or three tools.
+
+### A BAM is a sufficient input on its own
+
+`detect` accepts `--bam`, `--fastq`, or both.
+
+- With `--bam` alone, VAMOS, LongTR and TRGT read that BAM directly, with no
+  realignment. tandem-genotypes needs reads rather than an alignment, so a
+  FASTQ is extracted from the BAM once (primary alignments only, `MM`/`ML`
+  methylation tags kept) and reused.
+- With `--fastq` alone, the alignment is produced once with
+  `minimap2 -ax map-ont -Y` and shared across the tools that need it.
+- With both, the FASTQ wins wherever reads are needed, which is the better
+  option: reads extracted from an aligned BAM are missing anything that failed
+  to align, and LAST would never see them.
+- `--realign` ignores `--bam` for the alignment-based tools and realigns from
+  the FASTQ. Use it when the input BAM comes from another reference build,
+  another aligner, or an unsuitable preset.
+
+An input BAM with no index is never indexed in place, since it often sits in a
+read-only or shared directory. It is symlinked into the sample output directory
+and the symlink is indexed instead.
+
+Indexing a BAM and extracting a FASTQ from it belong to no single tool, so
+samtools for those steps comes from the `samtools_env` key in `config.yaml`, or
+from the current `PATH` when that key is absent.
 
 ## Preparing the LongTR regions catalog
 

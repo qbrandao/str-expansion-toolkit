@@ -6,6 +6,14 @@ samples, then merges the outputs into a single VCF per sample (see
 str_toolkit/merge.py for the merge logic: fuzzy interval + canonical motif
 matching, since the tools do not anchor their coordinates the same way).
 
+Inputs: a coordinate-sorted BAM, a FASTQ, or both. A BAM alone is enough,
+provided it was aligned to the reference given in config.yaml: it is passed
+straight to the alignment-based tools, and the reads tandem-genotypes needs
+are extracted from it. A FASTQ alone is also enough, since the alignment is
+then produced once and shared. Pass realign=True to ignore an input BAM and
+realign its reads instead, which a BAM from another reference build or
+another aligner requires.
+
 Prerequisite: micromamba must be installed, and the environments referenced
 in config.yaml (clair3, whatshap-env, vamos, trgt, longtr, last_env,
 tandem-env) must already exist on the execution machine.
@@ -15,11 +23,13 @@ from __future__ import annotations
 
 import glob
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import NamedTuple
 
 from str_toolkit.config import Config
-from str_toolkit.utils import ensure_outdir, read_samples_list, run_in_env
+from str_toolkit.utils import ensure_outdir, read_samples_list, run_cmd, run_in_env
 from str_toolkit import merge
 
 logger = logging.getLogger(__name__)
@@ -40,14 +50,79 @@ def _require(value, sample_id: str, field_name: str, tool: str) -> str:
     return value
 
 
+def _samtools(cfg: Config, args: list[str], *, stdout_path: Path | str | None = None,
+              shell_pipeline: str | None = None):
+    """
+    Runs samtools either inside the environment named by `samtools_env` in
+    config.yaml, or directly on the current PATH when that key is absent.
+    Used for the input inspection and conversion steps, which do not belong
+    to any single tool's environment.
+    """
+    if cfg.samtools_env:
+        return run_in_env(cfg.samtools_env, args, stdout_path=stdout_path,
+                          shell_pipeline=shell_pipeline)
+    if shell_pipeline is not None:
+        import subprocess
+        logger.info("bash -c: %s", shell_pipeline)
+        return subprocess.run(["bash", "-c", shell_pipeline], check=True)
+    if stdout_path is not None:
+        import subprocess
+        logger.info("%s > %s", " ".join(args), stdout_path)
+        with open(stdout_path, "w") as out_fh:
+            return subprocess.run(args, stdout=out_fh, check=True)
+    return run_cmd(args)
+
+
+def _bam_is_indexed(bam: str | Path) -> bool:
+    bam = str(bam)
+    candidates = [f"{bam}.bai", f"{bam}.csi", f"{bam}.crai",
+                  str(Path(bam).with_suffix(".bai"))]
+    return any(os.path.exists(c) for c in candidates)
+
+
+def _ensure_indexed_bam(bam: str, cfg: Config, outdir: Path, threads: int, sid: str) -> Path:
+    """
+    Returns an indexed BAM path for an already-aligned input BAM.
+
+    The input BAM often lives in a read-only or shared directory, so it is
+    never indexed in place: when no index is found next to it, a symlink is
+    created in the sample output directory and that symlink is indexed
+    instead. The BAM data itself is never copied.
+    """
+    if _bam_is_indexed(bam):
+        return Path(bam)
+
+    link = outdir / f"{sid}.input.bam"
+    if not link.exists():
+        logger.info("[%s] input BAM has no index, symlinking into %s", sid, outdir)
+        link.symlink_to(os.path.abspath(bam))
+    if not _bam_is_indexed(link):
+        logger.info("[%s] indexing %s", sid, link.name)
+        _samtools(cfg, ["samtools", "index", "-@", str(threads), str(link)])
+    return link
+
+
 # ---------------------------------------------------------------------
 # VAMOS: clair3 (phasing) -> whatshap haplotag/split -> vamos --contig x2
 # ---------------------------------------------------------------------
 
-def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int) -> dict[str, Path]:
-    bam = _require(sample.bam_path, sample.sample_id, "bam_path", "VAMOS")
+def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int,
+              realign: bool = False) -> dict[str, Path]:
     sid = sample.sample_id
     cvamos = cfg.vamos
+
+    # clair3 needs an indexed, aligned BAM. When only a FASTQ is available,
+    # or when the caller asked for a realignment, fall back to the shared
+    # minimap2 step rather than failing.
+    if sample.bam_path and not realign:
+        bam = str(_ensure_indexed_bam(sample.bam_path, cfg, outdir, threads, sid))
+    else:
+        bam = str(_ensure_ont_sorted_bam(
+            sample, cfg.longtr.mmi or cfg.trgt.mmi, cfg.longtr.env or cfg.trgt.env,
+            outdir, threads, "VAMOS", cfg, realign,
+        ))
+        if not _bam_is_indexed(bam):
+            _samtools(cfg, ["samtools", "index", "-@", str(threads), bam])
 
     phased_vcf = outdir / "phased_merge_output.vcf.gz"
     if not phased_vcf.exists():
@@ -131,16 +206,34 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int) -> dict[s
 
 
 # ---------------------------------------------------------------------
-# Shared alignment (ONT minimap2 + sort + index), reused by TRGT and
-# LongTR: both tools read an already-aligned BAM/CRAM, so there is no need
-# to align twice if both run in the same job.
+# Shared inputs (an aligned BAM, and a FASTQ), reused across tools.
+#
+# TRGT and LongTR both read an already-aligned BAM, so the alignment is
+# done at most once per job. An input BAM supplied by the caller is reused
+# as is rather than realigned, provided it was aligned to the same
+# reference as `reference` in config.yaml. Use realign=True to force a
+# fresh minimap2 alignment from the FASTQ instead, which is what an input
+# BAM aligned to another build, or with an unsuitable preset, requires.
 # ---------------------------------------------------------------------
 
-def _ensure_ont_sorted_bam(sample: Sample, mmi: str, align_env: str, outdir: Path, threads: int, tool_label: str) -> Path:
+def _ensure_ont_sorted_bam(
+    sample: Sample,
+    mmi: str,
+    align_env: str,
+    outdir: Path,
+    threads: int,
+    tool_label: str,
+    cfg: Config,
+    realign: bool = False,
+) -> Path:
     sid = sample.sample_id
     existing = sorted(glob.glob(str(outdir / f"{sid}*.sorted.bam")))
     if existing:
         return Path(existing[0])
+
+    if sample.bam_path and not realign:
+        logger.info("[%s] %s: reusing the input BAM (no realignment)", sid, tool_label)
+        return _ensure_indexed_bam(sample.bam_path, cfg, outdir, threads, sid)
 
     fastq = _require(sample.fastq_path, sid, "fastq_path", tool_label)
     sorted_bam = outdir / f"{sid}.sorted.bam"
@@ -156,6 +249,44 @@ def _ensure_ont_sorted_bam(sample: Sample, mmi: str, align_env: str, outdir: Pat
     return sorted_bam
 
 
+def _ensure_fastq(sample: Sample, cfg: Config, outdir: Path, threads: int, tool_label: str) -> str:
+    """
+    Returns a FASTQ for the sample, extracting one from the input BAM when
+    none was supplied. tandem-genotypes needs reads rather than an
+    alignment, since it realigns them with LAST.
+
+    Extraction keeps the MM/ML methylation tags and, for a BAM that is
+    already aligned, drops secondary and supplementary records so that each
+    read appears exactly once.
+    """
+    if sample.fastq_path:
+        return sample.fastq_path
+
+    sid = sample.sample_id
+    bam = _require(sample.bam_path, sid, "fastq_path or bam_path", tool_label)
+
+    fastq_out = outdir / f"{sid}.reads.fastq.gz"
+    if fastq_out.exists():
+        logger.info("[%s] %s: %s already present, skipping extraction", sid, tool_label, fastq_out.name)
+        return str(fastq_out)
+
+    logger.info("[%s] %s: no FASTQ supplied, extracting reads from the input BAM", sid, tool_label)
+    tmp_out = outdir / f"{sid}.reads.fastq.gz.tmp"
+    # Whole-genome extraction is compression-bound, and single-threaded gzip
+    # turns a step of minutes into one of hours, so pigz is used when present.
+    compress = f"pigz -p {threads} -c" if shutil.which("pigz") else "gzip -c"
+    _samtools(
+        cfg,
+        [],
+        shell_pipeline=(
+            f"samtools fastq -@ {threads} -T MM,ML -F 0x900 {bam} "
+            f"| {compress} > {tmp_out}"
+        ),
+    )
+    os.replace(tmp_out, fastq_out)
+    return str(fastq_out)
+
+
 # ---------------------------------------------------------------------
 # TRGT: minimap2 (align + sort) -> trgt genotype
 #
@@ -167,14 +298,16 @@ def _ensure_ont_sorted_bam(sample: Sample, mmi: str, align_env: str, outdir: Pat
 # document this as an off-label use.
 # ---------------------------------------------------------------------
 
-def run_trgt(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
+def run_trgt(sample: Sample, cfg: Config, outdir: Path, threads: int,
+             realign: bool = False) -> Path:
     sid = sample.sample_id
     ctrgt = cfg.trgt
 
-    sorted_bam = _ensure_ont_sorted_bam(sample, ctrgt.mmi, ctrgt.env, outdir, threads, "TRGT")
+    sorted_bam = _ensure_ont_sorted_bam(
+        sample, ctrgt.mmi, ctrgt.env, outdir, threads, "TRGT", cfg, realign
+    )
 
-    bai = Path(f"{sorted_bam}.bai")
-    if not bai.exists():
+    if not _bam_is_indexed(sorted_bam):
         logger.info("[%s] TRGT: indexing bam", sid)
         run_in_env(ctrgt.env, ["samtools", "index", "-@", str(threads), str(sorted_bam)])
 
@@ -208,14 +341,16 @@ def run_trgt(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
 # sufficient read quality/depth (--min-reads=10 by default).
 # ---------------------------------------------------------------------
 
-def run_longtr(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
+def run_longtr(sample: Sample, cfg: Config, outdir: Path, threads: int,
+               realign: bool = False) -> Path:
     sid = sample.sample_id
     clongtr = cfg.longtr
 
-    sorted_bam = _ensure_ont_sorted_bam(sample, clongtr.mmi, clongtr.env, outdir, threads, "LongTR")
+    sorted_bam = _ensure_ont_sorted_bam(
+        sample, clongtr.mmi, clongtr.env, outdir, threads, "LongTR", cfg, realign
+    )
 
-    bai = Path(f"{sorted_bam}.bai")
-    if not bai.exists():
+    if not _bam_is_indexed(sorted_bam):
         logger.info("[%s] LongTR: indexing bam", sid)
         run_in_env(clongtr.env, ["samtools", "index", "-@", str(threads), str(sorted_bam)])
 
@@ -246,7 +381,8 @@ def run_longtr(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
 # tandem-genotypes: last-train -> lastal | last-split -> tandem-genotypes
 # ---------------------------------------------------------------------
 
-def run_tandem_genotypes(sample: Sample, cfg: Config, outdir: Path, threads: int) -> Path:
+def run_tandem_genotypes(sample: Sample, cfg: Config, outdir: Path, threads: int,
+                         realign: bool = False) -> Path:
     sid = sample.sample_id
     ctg = cfg.tandem_genotypes
 
@@ -255,7 +391,7 @@ def run_tandem_genotypes(sample: Sample, cfg: Config, outdir: Path, threads: int
         logger.info("[%s] tandem-genotypes: already done, skipping", sid)
         return tsv_out
 
-    fastq = _require(sample.fastq_path, sid, "fastq_path", "tandem-genotypes")
+    fastq = _ensure_fastq(sample, cfg, outdir, threads, "tandem-genotypes")
 
     par_file = outdir / f"{sid}_reads.par"
     logger.info("[%s] tandem-genotypes: last-train", sid)
@@ -313,7 +449,8 @@ def merge_to_vcf(sample: Sample, tool_outputs: dict[str, object], outdir: Path) 
 # ---------------------------------------------------------------------
 
 def detect_one_sample(
-    sample: Sample, cfg: Config, outdir: Path, tools: list[str], threads: int
+    sample: Sample, cfg: Config, outdir: Path, tools: list[str], threads: int,
+    realign: bool = False,
 ) -> Path:
     sample_outdir = outdir / sample.sample_id
     ensure_outdir(sample_outdir)
@@ -322,7 +459,7 @@ def detect_one_sample(
     for tool_name in tools:
         logger.info("Sample %s: running %s", sample.sample_id, tool_name)
         runner = TOOL_RUNNERS[tool_name]
-        tool_outputs[tool_name] = runner(sample, cfg, sample_outdir, threads)
+        tool_outputs[tool_name] = runner(sample, cfg, sample_outdir, threads, realign)
 
     final_vcf = merge_to_vcf(sample, tool_outputs, sample_outdir)
     logger.info("Sample %s: final VCF -> %s", sample.sample_id, final_vcf)
@@ -344,8 +481,9 @@ def run(args) -> int:
         samples = [Sample(**row) for row in read_samples_list(args.samples_list)]
 
     produced_vcfs = []
+    realign = getattr(args, "realign", False)
     for sample in samples:
-        vcf_path = detect_one_sample(sample, cfg, outdir, args.tools, args.threads)
+        vcf_path = detect_one_sample(sample, cfg, outdir, args.tools, args.threads, realign)
         produced_vcfs.append(vcf_path)
 
     logger.info("Done: %d VCFs produced in %s", len(produced_vcfs), outdir)
