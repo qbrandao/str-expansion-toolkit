@@ -43,7 +43,7 @@ import argparse
 import sys
 
 from str_toolkit import detect, controls, compare, repertoire, instability, truthset
-from str_toolkit.annotate import DEFAULT_PROMOTER_WINDOW_BP
+from str_toolkit.annotate import DEFAULT_PROMOTER_WINDOW_BP, DEFAULT_SUBTELOMERE_BP
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -202,6 +202,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Promoter window (bp) upstream of the TSS counted as '5prime_region' (default: {DEFAULT_PROMOTER_WINDOW_BP}).",
     )
     p_repertoire.add_argument(
+        "--subtelomere-bp", type=int, default=DEFAULT_SUBTELOMERE_BP,
+        help="Distance (bp) from either chromosome end counted as 'subtelomeric' "
+        f"(default: {DEFAULT_SUBTELOMERE_BP}). A scientific choice to state in the "
+        "methods, not a constant: 0 falls back to the assembly's telomere gap, which "
+        "is unsequenced and therefore yields no loci.",
+    )
+    p_repertoire.add_argument(
         "-o", "--output", required=True, help="Output file: one row per locus (TSV/CSV)."
     )
     p_repertoire.add_argument(
@@ -235,6 +242,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_meiotic.add_argument(
         "--promoter-bp", type=int, default=DEFAULT_PROMOTER_WINDOW_BP,
         help=f"Promoter window (bp) upstream of the TSS (default: {DEFAULT_PROMOTER_WINDOW_BP}).",
+    )
+    p_meiotic.add_argument(
+        "--subtelomere-bp", type=int, default=DEFAULT_SUBTELOMERE_BP,
+        help="Distance (bp) from either chromosome end counted as 'subtelomeric' "
+        f"(default: {DEFAULT_SUBTELOMERE_BP}). A scientific choice to state in the "
+        "methods, not a constant: 0 falls back to the assembly's telomere gap, which "
+        "is unsequenced and therefore yields no loci.",
     )
     p_meiotic.add_argument("-o", "--output", required=True, help="Per-locus long-format output (TSV/CSV).")
     p_meiotic.add_argument(
@@ -281,6 +295,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_somatic.add_argument(
         "--promoter-bp", type=int, default=DEFAULT_PROMOTER_WINDOW_BP,
         help=f"Promoter window (bp) upstream of the TSS (default: {DEFAULT_PROMOTER_WINDOW_BP}).",
+    )
+    p_somatic.add_argument(
+        "--subtelomere-bp", type=int, default=DEFAULT_SUBTELOMERE_BP,
+        help="Distance (bp) from either chromosome end counted as 'subtelomeric' "
+        f"(default: {DEFAULT_SUBTELOMERE_BP}). A scientific choice to state in the "
+        "methods, not a constant: 0 falls back to the assembly's telomere gap, which "
+        "is unsequenced and therefore yields no loci.",
     )
     p_somatic.add_argument(
         "--min-off-allele-reads", type=int, default=3,

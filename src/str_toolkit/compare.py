@@ -23,7 +23,7 @@ from pathlib import Path
 import pandas as pd
 
 from str_toolkit import merge
-from str_toolkit.annotate import annotate_locus, load_exons, load_genes
+from str_toolkit.annotate import annotate_locus, build_location_index, load_exons, load_genes
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,9 @@ def build_comparison_table(
     patients_dir = Path(patients_dir)
     dict_genes = load_genes(genes_bed)
     dict_exons = load_exons(exons_bed)
+    # built once, then passed to every call: without it each locus would
+    # rescan every gene of its chromosome
+    index = build_location_index(dict_genes, dict_exons)
 
     rows = []
     for pid in patient_ids:
@@ -99,7 +102,7 @@ def build_comparison_table(
             row["n_tools_expanded"] = sum(1 for d in diffs.values() if d > threshold)
             row["max_diff"] = max_diff
 
-            genes, features = annotate_locus(chrom, pos, dict_genes, dict_exons)
+            genes, features = annotate_locus(chrom, pos, dict_genes, dict_exons, index=index)
             row["gene"] = genes
             row["feature"] = features
 

@@ -30,7 +30,14 @@ from pathlib import Path
 from typing import NamedTuple
 
 from str_toolkit.config import Config
-from str_toolkit.utils import ensure_outdir, read_samples_list, run_cmd, run_in_env, set_env_runner
+from str_toolkit.utils import (
+    ensure_outdir,
+    read_samples_list,
+    run_cmd,
+    run_in_env,
+    set_env_runner,
+    wrap_pipeline,
+)
 from str_toolkit import merge
 
 logger = logging.getLogger(__name__)
@@ -64,7 +71,7 @@ def _run_maybe_env(env: str, args: list[str], *, stdout_path: Path | str | None 
                           shell_pipeline=shell_pipeline)
     if shell_pipeline is not None:
         logger.info("bash -c: %s", shell_pipeline)
-        return subprocess.run(["bash", "-c", shell_pipeline], check=True)
+        return subprocess.run(["bash", "-c", wrap_pipeline(shell_pipeline)], check=True)
     if stdout_path is not None:
         logger.info("%s > %s", " ".join(args), stdout_path)
         with open(stdout_path, "w") as out_fh:
@@ -121,6 +128,19 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int,
               realign: bool = False) -> dict[str, Path]:
     sid = sample.sample_id
     cvamos = cfg.vamos
+
+    # Both final VCFs already present: nothing to do, and in particular no
+    # need for the intermediates. The per-step skips below are sequential, so
+    # without this short circuit a deleted haplotagged BAM would be rebuilt
+    # even though the VCFs it leads to are already there. Those intermediates
+    # are large (a haplotagged BAM is about the size of the input), and
+    # deleting them after a finished run has to stay safe.
+    hap_vcfs_done = {
+        hap: outdir / f"{sid}_assembly.{hap}.vcf" for hap in ("hap1", "hap2")
+    }
+    if all(v.exists() for v in hap_vcfs_done.values()):
+        logger.info("[%s] VAMOS: both haplotype VCFs already present, skipping", sid)
+        return hap_vcfs_done
 
     # clair3 needs an indexed, aligned BAM. When only a FASTQ is available,
     # or when the caller asked for a realignment, fall back to the shared
@@ -253,14 +273,16 @@ def _ensure_ont_sorted_bam(
     env = cfg.align_env if cfg.align_env else align_env
     logger.info("[%s] %s: minimap2 (map-ont) align + sort, env=%s",
                 sid, tool_label, env or "PATH")
+    tmp_bam = outdir / f"{sid}.sorted.bam.tmp"
     _run_maybe_env(
         env,  # must provide minimap2 + samtools
         [],
         shell_pipeline=(
             f"minimap2 -t {threads} -ax map-ont -Y {mmi} {fastq} "
-            f"| samtools sort -@ {threads} -o {sorted_bam}"
+            f"| samtools sort -@ {threads} -o {tmp_bam}"
         ),
     )
+    os.replace(tmp_bam, sorted_bam)
     return sorted_bam
 
 
@@ -408,32 +430,56 @@ def run_tandem_genotypes(sample: Sample, cfg: Config, outdir: Path, threads: int
 
     fastq = _ensure_fastq(sample, cfg, outdir, threads, "tandem-genotypes")
 
+    # LAST memory grows with the thread count and with the query batch size,
+    # and lastal on a whole ONT genome has exhausted RAM and swap at the
+    # defaults. `last_threads` and `lastal_batch_size` bound both; see
+    # config.example.yaml.
+    last_threads = ctg.last_threads if ctg.last_threads > 0 else threads
+
     par_file = outdir / f"{sid}_reads.par"
-    logger.info("[%s] tandem-genotypes: last-train", sid)
-    _run_maybe_env(
-        ctg.env_last,
-        [ctg.bin_last_train, "-P", str(threads), "-Q0", ctg.last_ref_db, fastq],
-        stdout_path=par_file,
-    )
+    if par_file.exists():
+        logger.info("[%s] tandem-genotypes: last-train parameters already present", sid)
+    else:
+        logger.info("[%s] tandem-genotypes: last-train (%d threads)", sid, last_threads)
+        tmp_par = outdir / f"{sid}_reads.par.tmp"
+        _run_maybe_env(
+            ctg.env_last,
+            [ctg.bin_last_train, "-P", str(last_threads), "-Q0", ctg.last_ref_db, fastq],
+            stdout_path=tmp_par,
+        )
+        os.replace(tmp_par, par_file)
 
     maf_file = outdir / f"{sid}_alignments.maf"
-    logger.info("[%s] tandem-genotypes: lastal | last-split", sid)
-    _run_maybe_env(
-        ctg.env_last,
-        [],
-        shell_pipeline=(
-            f"{ctg.bin_lastal} -P{threads} --split -p {par_file} "
-            f"{ctg.last_ref_db} {fastq} "
-            f"| {ctg.bin_last_split} -m1 > {maf_file}"
-        ),
-    )
+    if maf_file.exists():
+        logger.info("[%s] tandem-genotypes: alignments already present", sid)
+    else:
+        logger.info("[%s] tandem-genotypes: lastal | last-split (%d threads, batch %s)",
+                    sid, last_threads, ctg.lastal_batch_size or "default")
+        # Written under a temporary name and renamed only on a clean exit, so a
+        # killed lastal can never leave a truncated MAF that the check above
+        # would then accept as finished.
+        tmp_maf = outdir / f"{sid}_alignments.maf.tmp"
+        batch = f"-i {ctg.lastal_batch_size} " if ctg.lastal_batch_size else ""
+        extra = f"{ctg.lastal_extra_args} " if ctg.lastal_extra_args else ""
+        _run_maybe_env(
+            ctg.env_last,
+            [],
+            shell_pipeline=(
+                f"{ctg.bin_lastal} -P{last_threads} {batch}{extra}--split "
+                f"-p {par_file} {ctg.last_ref_db} {fastq} "
+                f"| {ctg.bin_last_split} -m1 > {tmp_maf}"
+            ),
+        )
+        os.replace(tmp_maf, maf_file)
 
     logger.info("[%s] tandem-genotypes: genotyping", sid)
+    tmp_tsv = outdir / f"{sid}.tandem_genotypes.tsv.tmp"
     _run_maybe_env(
         ctg.env_tandem,
         [ctg.bin_tandem_genotypes, ctg.repeats_bed, str(maf_file)],
-        stdout_path=tsv_out,
+        stdout_path=tmp_tsv,
     )
+    os.replace(tmp_tsv, tsv_out)
 
     return tsv_out
 

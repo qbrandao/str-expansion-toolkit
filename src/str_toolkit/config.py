@@ -52,6 +52,13 @@ class TandemGenotypesConfig:
     bin_tandem_genotypes: str = "tandem-genotypes"
     last_ref_db: str = ""  # prefix of an index built with `lastdb`
     repeats_bed: str = ""
+    # LAST memory scales with the thread count and with how much query
+    # sequence is held in memory at once. 0 means inherit --threads, which on
+    # a whole ONT genome has exhausted RAM and swap; lastal_batch_size maps to
+    # lastal -i and is the main bound (e.g. "1G").
+    last_threads: int = 0
+    lastal_batch_size: str = ""
+    lastal_extra_args: str = ""
 
 
 @dataclass

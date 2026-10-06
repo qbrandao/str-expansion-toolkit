@@ -23,7 +23,7 @@ from pathlib import Path
 import pandas as pd
 
 from str_toolkit import controls
-from str_toolkit.annotate import DEFAULT_PROMOTER_WINDOW_BP, classify_location, classify_motif, load_exons, load_genes
+from str_toolkit.annotate import DEFAULT_PROMOTER_WINDOW_BP, DEFAULT_SUBTELOMERE_BP, build_location_index, classify_location, classify_motif, load_exons, load_genes
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,14 @@ def build_repertoire(
     exons_bed: str,
     sample_ids: list[str] | None = None,
     promoter_bp: int = DEFAULT_PROMOTER_WINDOW_BP,
+    subtelomere_bp: int = DEFAULT_SUBTELOMERE_BP,
 ) -> pd.DataFrame:
     registry = controls.collect_control_calls(controls_dir, sample_ids)
     dict_genes = load_genes(genes_bed)
     dict_exons = load_exons(exons_bed)
+    # built once, then passed to every call: without it each locus would
+    # rescan every gene of its chromosome
+    index = build_location_index(dict_genes, dict_exons)
 
     rows = []
     for locus_id, entry in registry.items():
@@ -47,7 +51,7 @@ def build_repertoire(
             "chrom": chrom,
             "pos": pos,
             "motif": motif,
-            "location_category": classify_location(chrom, pos, dict_genes, dict_exons, promoter_bp),
+            "location_category": classify_location(chrom, pos, dict_genes, dict_exons, promoter_bp, index=index, subtelomere_bp=subtelomere_bp),
             "motif_category": classify_motif(motif),
         }
         for tool, stats in entry["tools"].items():
@@ -89,6 +93,7 @@ def run(args) -> int:
         exons_bed=args.exons_bed,
         sample_ids=sample_ids,
         promoter_bp=args.promoter_bp,
+        subtelomere_bp=args.subtelomere_bp,
     )
 
     sep = "," if args.format == "csv" else "\t"

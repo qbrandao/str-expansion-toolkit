@@ -154,6 +154,36 @@ Indexing a BAM and extracting a FASTQ from it belong to no single tool, so
 samtools for those steps comes from the `samtools_env` key in `config.yaml`, or
 from the current `PATH` when that key is absent.
 
+## Two annotation windows that are scientific choices
+
+`repertoire` and both instability analyses take `--promoter-bp` and
+`--subtelomere-bp`. Neither is a constant of nature, both belong in a methods
+section, and both must stay identical across cases and controls.
+
+`--subtelomere-bp` is measured from the chromosome ends, not from the
+assembly's telomere annotation. That annotation is a 10 kb gap of N at each
+end: no read aligns there, so no repeat can ever be called inside it. Using it
+as the subtelomeric definition made the category structurally unreachable,
+which a run on a real genome showed plainly, with zero subtelomeric loci and
+the first callable locus of every chromosome sitting a few hundred base pairs
+past the 10 kb mark. The default is 500 kb; `0` reverts to the gap and yields
+nothing. On a real two-million-locus call set the window decides a meaningful
+count:
+
+| `--subtelomere-bp` | subtelomeric loci |
+|---|---|
+| 0 (the telomere gap) | 0 |
+| 100 kb | 1 612 |
+| 500 kb | 15 120 |
+
+`--promoter-bp` is the window upstream of the TSS counted as `5prime_region`,
+2 kb by default, where 1 kb and 5 kb are both defensible.
+
+One more thing the categories depend on, and which no flag controls: how
+inclusive the genes BED is. A file covering lncRNAs and pseudogenes pushes
+loci from `intergenic_other` into `intronic`, so the intronic share describes
+the annotation as much as the genome. State which gene set was used.
+
 ## Producing something a collaborator can read
 
 A finished `detect` leaves a merged VCF of about two million rows whose

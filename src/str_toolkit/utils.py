@@ -78,6 +78,23 @@ def _env_prefix(env: str) -> list[str]:
     return [runner, "run", "-n", env]
 
 
+# Without pipefail, bash reports the exit status of the LAST command in a
+# pipeline only. An out-of-memory kill of `lastal` in
+# `lastal ... | last-split -m1 > out.maf` therefore leaves `last-split`
+# exiting 0 on a short read of its input: the step looks successful, the MAF
+# is silently truncated, and the idempotence check then treats the partial
+# result as finished forever. Every pipeline here runs under pipefail so the
+# failure of any stage fails the step.
+PIPEFAIL_PREFIX = "set -o pipefail; "
+
+
+def wrap_pipeline(shell_pipeline: str) -> str:
+    """Prefixes a shell pipeline with `set -o pipefail` unless already set."""
+    if "pipefail" in shell_pipeline:
+        return shell_pipeline
+    return PIPEFAIL_PREFIX + shell_pipeline
+
+
 def run_in_env(
     env: str,
     cmd: list[str],
@@ -94,11 +111,12 @@ def run_in_env(
     - shell_pipeline: if provided (a shell string, e.g. "cmd1 | cmd2 > out"), ignores
       `cmd` and runs this string via `<runner> run -n <env> bash -c "<shell_pipeline>"`.
       Useful for reproducing pipes such as `lastal ... | last-split ...`.
+      The pipeline always runs under `set -o pipefail`, see PIPEFAIL below.
     """
     prefix = _env_prefix(env)
 
     if shell_pipeline is not None:
-        full_cmd = [*prefix, "bash", "-c", shell_pipeline]
+        full_cmd = [*prefix, "bash", "-c", wrap_pipeline(shell_pipeline)]
         logger.info("[%s] bash -c: %s", env, shell_pipeline)
         return subprocess.run(full_cmd, check=check)
 

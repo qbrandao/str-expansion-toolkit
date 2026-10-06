@@ -33,7 +33,7 @@ import pandas as pd
 import pysam
 
 from str_toolkit import merge
-from str_toolkit.annotate import DEFAULT_PROMOTER_WINDOW_BP, classify_location, classify_motif, load_exons, load_genes
+from str_toolkit.annotate import DEFAULT_PROMOTER_WINDOW_BP, DEFAULT_SUBTELOMERE_BP, build_location_index, classify_location, classify_motif, load_exons, load_genes
 from str_toolkit.utils import read_tsv_dicts
 
 logger = logging.getLogger(__name__)
@@ -100,11 +100,15 @@ def compute_meiotic_instability(
     genes_bed: str,
     exons_bed: str,
     promoter_bp: int = DEFAULT_PROMOTER_WINDOW_BP,
+    subtelomere_bp: int = DEFAULT_SUBTELOMERE_BP,
     exclude_sex_chromosomes: bool = True,
 ) -> pd.DataFrame:
     data_dir = Path(data_dir)
     dict_genes = load_genes(genes_bed)
     dict_exons = load_exons(exons_bed)
+    # built once, then passed to every call: without it each locus would
+    # rescan every gene of its chromosome
+    index = build_location_index(dict_genes, dict_exons)
 
     rows = []
     for duo in duos:
@@ -139,7 +143,7 @@ def compute_meiotic_instability(
             for src, size in c_rec["sizes_by_source"].items():
                 c_by_tool[merge.tool_family(src)].append(size)
 
-            loc_cat = classify_location(p_rec["chrom"], p_rec["pos"], dict_genes, dict_exons, promoter_bp)
+            loc_cat = classify_location(p_rec["chrom"], p_rec["pos"], dict_genes, dict_exons, promoter_bp, index=index, subtelomere_bp=subtelomere_bp)
             motif_cat = classify_motif(p_rec["motif"])
 
             for tool in sorted(set(p_by_tool) & set(c_by_tool)):
@@ -282,11 +286,15 @@ def compute_somatic_instability(
     genes_bed: str,
     exons_bed: str,
     promoter_bp: int = DEFAULT_PROMOTER_WINDOW_BP,
+    subtelomere_bp: int = DEFAULT_SUBTELOMERE_BP,
     min_off_allele_reads: int = 3,
 ) -> pd.DataFrame:
     detect_dir = Path(detect_dir)
     dict_genes = load_genes(genes_bed)
     dict_exons = load_exons(exons_bed)
+    # built once, then passed to every call: without it each locus would
+    # rescan every gene of its chromosome
+    index = build_location_index(dict_genes, dict_exons)
 
     rows = []
     for sid in sample_ids:
@@ -297,7 +305,7 @@ def compute_somatic_instability(
             rows.append({
                 "sample_id": sid, "tool": "longtr",
                 "chrom": rec["chrom"], "pos": rec["pos"], "motif": rec["motif"],
-                "location_category": classify_location(rec["chrom"], rec["pos"], dict_genes, dict_exons, promoter_bp),
+                "location_category": classify_location(rec["chrom"], rec["pos"], dict_genes, dict_exons, promoter_bp, index=index, subtelomere_bp=subtelomere_bp),
                 "motif_category": classify_motif(rec["motif"]),
                 **metrics,
             })
@@ -309,7 +317,7 @@ def compute_somatic_instability(
             rows.append({
                 "sample_id": sid, "tool": "tandem-genotypes",
                 "chrom": row["chrom"], "pos": row["start"], "motif": row["motif"],
-                "location_category": classify_location(row["chrom"], row["start"], dict_genes, dict_exons, promoter_bp),
+                "location_category": classify_location(row["chrom"], row["start"], dict_genes, dict_exons, promoter_bp, index=index, subtelomere_bp=subtelomere_bp),
                 "motif_category": classify_motif(row["motif"]),
                 **metrics,
             })
@@ -330,7 +338,8 @@ def run_meiotic(args) -> int:
         duos,
         args.genes_bed,
         args.exons_bed,
-        args.promoter_bp,
+        promoter_bp=args.promoter_bp,
+        subtelomere_bp=args.subtelomere_bp,
         exclude_sex_chromosomes=not args.include_sex_chromosomes,
     )
 
@@ -355,7 +364,13 @@ def run_somatic(args) -> int:
 
     sample_ids = [row["sample_id"] for row in read_tsv_dicts(args.samples_list, {"sample_id"})]
     df = compute_somatic_instability(
-        args.detect_dir, sample_ids, args.genes_bed, args.exons_bed, args.promoter_bp, args.min_off_allele_reads
+        args.detect_dir,
+        sample_ids,
+        args.genes_bed,
+        args.exons_bed,
+        promoter_bp=args.promoter_bp,
+        subtelomere_bp=args.subtelomere_bp,
+        min_off_allele_reads=args.min_off_allele_reads,
     )
 
     sep = "," if args.format == "csv" else "\t"
