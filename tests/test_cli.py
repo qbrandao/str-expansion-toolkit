@@ -79,3 +79,64 @@ def test_meiotic_instability_include_sex_chromosomes_flag():
         "-o", "out.tsv", "--include-sex-chromosomes",
     ])
     assert args.include_sex_chromosomes is True
+
+
+# ---------------------------------------------------------------------
+# --version, which exists to tell a stale install from a current one.
+# ---------------------------------------------------------------------
+
+def test_version_reports_the_module_path_and_features(capsys):
+    from str_toolkit.cli import main
+
+    assert main(["--version"]) == 0
+    out = capsys.readouterr().out
+    assert "str-expansion-toolkit" in out
+    assert "module" in out and "str_toolkit" in out
+    assert "interpreter" in out
+    # the features an old install would be missing
+    assert "repertoire --subtelomere-bp" in out
+    assert "detect --realign" in out
+
+
+def test_version_needs_no_subcommand(capsys):
+    from str_toolkit.cli import main
+
+    # --version alone must not fail on a missing subcommand
+    assert main(["--version"]) == 0
+
+
+def test_no_subcommand_prints_help_and_fails(capsys):
+    from str_toolkit.cli import main
+
+    assert main([]) == 2
+    assert "usage: str-toolkit" in capsys.readouterr().out
+
+
+def test_repertoire_accepts_subtelomere_bp():
+    """The option whose absence signalled a stale install."""
+    from str_toolkit.cli import build_parser
+
+    args = build_parser().parse_args([
+        "repertoire", "--controls-dir", "d", "--genes-bed", "g.gz",
+        "--exons-bed", "e.gz", "-o", "out.tsv", "--subtelomere-bp", "250000",
+    ])
+    assert args.subtelomere_bp == 250_000
+
+
+def test_instability_subcommands_accept_subtelomere_bp():
+    from str_toolkit.cli import build_parser
+
+    parser = build_parser()
+    meiotic = parser.parse_args([
+        "meiotic-instability", "--duos", "d.tsv", "--data-dir", "x",
+        "--genes-bed", "g.gz", "--exons-bed", "e.gz", "-o", "m.tsv",
+        "--subtelomere-bp", "100000",
+    ])
+    assert meiotic.subtelomere_bp == 100_000
+
+    somatic = parser.parse_args([
+        "somatic-instability", "--samples-list", "s.tsv", "--detect-dir", "x",
+        "--genes-bed", "g.gz", "--exons-bed", "e.gz", "-o", "s.tsv",
+        "--subtelomere-bp", "5000000",
+    ])
+    assert somatic.subtelomere_bp == 5_000_000

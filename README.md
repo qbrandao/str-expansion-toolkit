@@ -18,6 +18,38 @@ documented as an off-label use in any resulting publication.
 The third default tool is **LongTR**, a long-read adaptation of HipSTR
 designed for both PacBio HiFi **and** ONT reads.
 
+## Checking which install you are running
+
+```bash
+str-toolkit --version
+```
+
+It prints the version, the module path actually imported, the interpreter, and
+whether the install is editable, followed by the features present. Run it first
+whenever an option the sources clearly define is rejected as unrecognized. The
+cause is almost always a non-editable install: `pip install .` without `-e`
+copies the sources into `site-packages`, where a later `git pull` never reaches
+them.
+
+```
+str-expansion-toolkit 0.1.0
+module      : /home/user/str-expansion-toolkit/src/str_toolkit/__init__.py
+interpreter : /home/user/anaconda3/envs/x/bin/python
+install     : editable (reads the repo sources)
+features    :
+  yes  repertoire --subtelomere-bp
+  yes  detect --realign / BAM-only input
+```
+
+A `module` path under `site-packages`, or a `NO` on a feature you expect, means
+the install is stale:
+
+```bash
+pip uninstall -y str-expansion-toolkit
+cd /path/to/str-expansion-toolkit && pip install -e .
+str-toolkit --version
+```
+
 ## Installation
 
 ```bash

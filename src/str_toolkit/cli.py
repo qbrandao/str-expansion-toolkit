@@ -51,7 +51,17 @@ def build_parser() -> argparse.ArgumentParser:
         prog="str-toolkit",
         description="Tandem repeat expansion detection and comparison (VAMOS / tandem-genotypes / LongTR / TRGT).",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument(
+        "--version",
+        dest="show_version",
+        action="store_true",
+        help="Print the version, which install is being used and which features it has, "
+        "then exit. Run this first whenever an option the sources define is rejected as "
+        "unrecognized.",
+    )
+    # not required, so --version works on its own; main() prints help when a
+    # subcommand is missing
+    subparsers = parser.add_subparsers(dest="command")
 
     # ---------------------------------------------------------------
     # 1) detect
@@ -354,9 +364,64 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_diagnostics() -> int:
+    """
+    What `--version` prints: enough to tell a stale install from a current
+    one in a single command.
+
+    A stale install is the failure this exists for. `pip install .` without
+    -e copies the sources into site-packages, where a later `git pull` never
+    reaches them, and an entry-point script from another environment resolves
+    to that copy. The symptom is an option the source clearly defines being
+    rejected as unrecognized, which is confusing enough to be worth one
+    command to settle.
+    """
+    import str_toolkit
+    from pathlib import Path
+
+    try:
+        from importlib.metadata import version as _dist_version
+
+        dist = _dist_version("str-expansion-toolkit")
+    except Exception:
+        dist = "unknown (not installed as a distribution?)"
+
+    module_path = Path(str_toolkit.__file__).resolve()
+    editable = module_path.parent.parent.name == "src"
+
+    print(f"str-expansion-toolkit {dist}")
+    print(f"module      : {module_path}")
+    print(f"interpreter : {sys.executable}")
+    print(f"install     : {'editable (reads the repo sources)' if editable else 'copied into site-packages'}")
+    if not editable:
+        print("              a git pull will NOT reach this copy. Reinstall with:")
+        print("                pip uninstall -y str-expansion-toolkit && pip install -e .")
+
+    # features added after the first release, so an old install is obvious
+    features = {
+        "repertoire --subtelomere-bp": "DEFAULT_SUBTELOMERE_BP",
+        "detect --realign / BAM-only input": "ALIGN_ENV_SUPPORTED",
+    }
+    print("features    :")
+    from str_toolkit import annotate, config
+
+    checks = {
+        "DEFAULT_SUBTELOMERE_BP": hasattr(annotate, "DEFAULT_SUBTELOMERE_BP"),
+        "ALIGN_ENV_SUPPORTED": hasattr(config.Config(), "align_env"),
+    }
+    for label, key in features.items():
+        print(f"  {'yes' if checks[key] else 'NO '}  {label}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "show_version", False):
+        return _print_diagnostics()
+    if not getattr(args, "command", None):
+        parser.print_help()
+        return 2
     return args.func(args) or 0
 
 
