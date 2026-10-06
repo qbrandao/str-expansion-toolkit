@@ -25,11 +25,12 @@ import glob
 import logging
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
 from str_toolkit.config import Config
-from str_toolkit.utils import ensure_outdir, read_samples_list, run_cmd, run_in_env
+from str_toolkit.utils import ensure_outdir, read_samples_list, run_cmd, run_in_env, set_env_runner
 from str_toolkit import merge
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,27 @@ def _require(value, sample_id: str, field_name: str, tool: str) -> str:
     return value
 
 
+def _run_maybe_env(env: str, args: list[str], *, stdout_path: Path | str | None = None,
+                   shell_pipeline: str | None = None):
+    """
+    Runs a command inside `env` when that name is non-empty, and on the
+    current PATH otherwise. Used by the steps that belong to no single tool,
+    where the binary is often a system one rather than one installed in a
+    tool environment.
+    """
+    if env:
+        return run_in_env(env, args, stdout_path=stdout_path,
+                          shell_pipeline=shell_pipeline)
+    if shell_pipeline is not None:
+        logger.info("bash -c: %s", shell_pipeline)
+        return subprocess.run(["bash", "-c", shell_pipeline], check=True)
+    if stdout_path is not None:
+        logger.info("%s > %s", " ".join(args), stdout_path)
+        with open(stdout_path, "w") as out_fh:
+            return subprocess.run(args, stdout=out_fh, check=True)
+    return run_cmd(args)
+
+
 def _samtools(cfg: Config, args: list[str], *, stdout_path: Path | str | None = None,
               shell_pipeline: str | None = None):
     """
@@ -58,19 +80,8 @@ def _samtools(cfg: Config, args: list[str], *, stdout_path: Path | str | None = 
     Used for the input inspection and conversion steps, which do not belong
     to any single tool's environment.
     """
-    if cfg.samtools_env:
-        return run_in_env(cfg.samtools_env, args, stdout_path=stdout_path,
+    return _run_maybe_env(cfg.samtools_env, args, stdout_path=stdout_path,
                           shell_pipeline=shell_pipeline)
-    if shell_pipeline is not None:
-        import subprocess
-        logger.info("bash -c: %s", shell_pipeline)
-        return subprocess.run(["bash", "-c", shell_pipeline], check=True)
-    if stdout_path is not None:
-        import subprocess
-        logger.info("%s > %s", " ".join(args), stdout_path)
-        with open(stdout_path, "w") as out_fh:
-            return subprocess.run(args, stdout=out_fh, check=True)
-    return run_cmd(args)
 
 
 def _bam_is_indexed(bam: str | Path) -> bool:
@@ -127,10 +138,10 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int,
     phased_vcf = outdir / "phased_merge_output.vcf.gz"
     if not phased_vcf.exists():
         logger.info("[%s] VAMOS: clair3 (phasing)", sid)
-        run_in_env(
+        _run_maybe_env(
             cvamos.env_clair3,
             [
-                "run_clair3.sh",
+                cvamos.bin_clair3,
                 f"--bam_fn={bam}",
                 f"--ref_fn={cfg.reference}",
                 f"--threads={threads}",
@@ -147,10 +158,10 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int,
     haplotype_tsv = outdir / f"{sid}_haplotype.tsv"
     if not haplotagged_bam.exists():
         logger.info("[%s] VAMOS: whatshap haplotag", sid)
-        run_in_env(
+        _run_maybe_env(
             cvamos.env_whatshap,
             [
-                "whatshap", "haplotag",
+                cvamos.bin_whatshap, "haplotag",
                 "-o", str(haplotagged_bam),
                 "--reference", cfg.reference,
                 str(phased_vcf),
@@ -167,18 +178,18 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int,
     h2 = outdir / f"{sid}_h2.bam"
     if not (h1.exists() and h2.exists()):
         logger.info("[%s] VAMOS: whatshap split", sid)
-        run_in_env(
+        _run_maybe_env(
             cvamos.env_whatshap,
             [
-                "whatshap", "split",
+                cvamos.bin_whatshap, "split",
                 "--output-h1", str(h1),
                 "--output-h2", str(h2),
                 bam,
                 str(haplotype_tsv),
             ],
         )
-        run_in_env(cvamos.env_whatshap, ["samtools", "index", str(h1)])
-        run_in_env(cvamos.env_whatshap, ["samtools", "index", str(h2)])
+        _samtools(cfg, ["samtools", "index", str(h1)])
+        _samtools(cfg, ["samtools", "index", str(h2)])
     else:
         logger.info("[%s] VAMOS: h1/h2 bam already present, skipping", sid)
 
@@ -187,10 +198,10 @@ def run_vamos(sample: Sample, cfg: Config, outdir: Path, threads: int,
         hap_vcf = outdir / f"{sid}_assembly.{hap}.vcf"
         if not hap_vcf.exists():
             logger.info("[%s] VAMOS: vamos --contig (%s)", sid, hap)
-            run_in_env(
+            _run_maybe_env(
                 cvamos.env_vamos,
                 [
-                    "vamos", "--contig",
+                    cvamos.bin_vamos, "--contig",
                     "-b", str(hap_bam),
                     "-r", cvamos.catalog,
                     "-s", sid,
@@ -237,9 +248,13 @@ def _ensure_ont_sorted_bam(
 
     fastq = _require(sample.fastq_path, sid, "fastq_path", tool_label)
     sorted_bam = outdir / f"{sid}.sorted.bam"
-    logger.info("[%s] %s: minimap2 (map-ont) align + sort", sid, tool_label)
-    run_in_env(
-        align_env,  # must provide minimap2 + samtools
+    # align_env in config.yaml wins, so minimap2 does not have to be installed
+    # inside the genotyping tool's own environment. Empty means the PATH.
+    env = cfg.align_env if cfg.align_env else align_env
+    logger.info("[%s] %s: minimap2 (map-ont) align + sort, env=%s",
+                sid, tool_label, env or "PATH")
+    _run_maybe_env(
+        env,  # must provide minimap2 + samtools
         [],
         shell_pipeline=(
             f"minimap2 -t {threads} -ax map-ont -Y {mmi} {fastq} "
@@ -309,16 +324,16 @@ def run_trgt(sample: Sample, cfg: Config, outdir: Path, threads: int,
 
     if not _bam_is_indexed(sorted_bam):
         logger.info("[%s] TRGT: indexing bam", sid)
-        run_in_env(ctrgt.env, ["samtools", "index", "-@", str(threads), str(sorted_bam)])
+        _samtools(cfg, ["samtools", "index", "-@", str(threads), str(sorted_bam)])
 
     out_prefix = outdir / f"{sid}.trgt"
     out_vcf = Path(f"{out_prefix}.vcf.gz")
     if not out_vcf.exists():
         logger.info("[%s] TRGT: trgt genotype", sid)
-        run_in_env(
+        _run_maybe_env(
             ctrgt.env,
             [
-                "trgt", "genotype",
+                ctrgt.bin, "genotype",
                 "--threads", str(threads),
                 "--reads", str(sorted_bam),
                 "--genome", cfg.reference,
@@ -352,17 +367,17 @@ def run_longtr(sample: Sample, cfg: Config, outdir: Path, threads: int,
 
     if not _bam_is_indexed(sorted_bam):
         logger.info("[%s] LongTR: indexing bam", sid)
-        run_in_env(clongtr.env, ["samtools", "index", "-@", str(threads), str(sorted_bam)])
+        _samtools(cfg, ["samtools", "index", "-@", str(threads), str(sorted_bam)])
 
     out_vcf = outdir / f"{sid}.longtr.vcf.gz"
     if not out_vcf.exists():
         logger.info("[%s] LongTR: genotyping", sid)
         # LongTR has no native multi-threading; --bam-samps/--bam-libs avoids
         # relying on correct @RG tags in the BAM produced by minimap2.
-        run_in_env(
+        _run_maybe_env(
             clongtr.env,
             [
-                "LongTR",
+                clongtr.bin,
                 "--bams", str(sorted_bam),
                 "--fasta", cfg.reference,
                 "--regions", clongtr.regions_bed,
@@ -395,27 +410,28 @@ def run_tandem_genotypes(sample: Sample, cfg: Config, outdir: Path, threads: int
 
     par_file = outdir / f"{sid}_reads.par"
     logger.info("[%s] tandem-genotypes: last-train", sid)
-    run_in_env(
+    _run_maybe_env(
         ctg.env_last,
-        ["last-train", "-P", str(threads), "-Q0", ctg.last_ref_db, fastq],
+        [ctg.bin_last_train, "-P", str(threads), "-Q0", ctg.last_ref_db, fastq],
         stdout_path=par_file,
     )
 
     maf_file = outdir / f"{sid}_alignments.maf"
     logger.info("[%s] tandem-genotypes: lastal | last-split", sid)
-    run_in_env(
+    _run_maybe_env(
         ctg.env_last,
         [],
         shell_pipeline=(
-            f"lastal -P{threads} --split -p {par_file} {ctg.last_ref_db} {fastq} "
-            f"| last-split -m1 > {maf_file}"
+            f"{ctg.bin_lastal} -P{threads} --split -p {par_file} "
+            f"{ctg.last_ref_db} {fastq} "
+            f"| {ctg.bin_last_split} -m1 > {maf_file}"
         ),
     )
 
     logger.info("[%s] tandem-genotypes: genotyping", sid)
-    run_in_env(
+    _run_maybe_env(
         ctg.env_tandem,
-        ["tandem-genotypes", ctg.repeats_bed, str(maf_file)],
+        [ctg.bin_tandem_genotypes, ctg.repeats_bed, str(maf_file)],
         stdout_path=tsv_out,
     )
 
@@ -470,6 +486,7 @@ def run(args) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     cfg = Config.from_yaml(args.config)
+    set_env_runner(cfg.env_runner or None)
     outdir = Path(args.outdir)
     ensure_outdir(outdir)
 

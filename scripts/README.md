@@ -5,6 +5,11 @@ chain everything at once with `./scripts/submit_full_pipeline.sh`.
 
 ## Prerequisites (place at the repo root before running)
 
+- an environment runner: `micromamba`, `mamba` or `conda`. Whichever is present
+  is auto-detected, and `env_runner` in `config.yaml` overrides that with a name
+  or a full path (an anaconda installation typically needs
+  `env_runner: /home/<user>/anaconda3/bin/conda`)
+
 - `config.yaml` (copied from `config.example.yaml`, paths adapted)
 - `controls.tsv`, `patients.tsv`, `ceph.tsv`: TSV with header
   `sample_id\tbam_path\tfastq_path`
@@ -39,8 +44,9 @@ chain everything at once with `./scripts/submit_full_pipeline.sh`.
 | `12_test_new_bam_longtr.sbatch` | fast check of a newly received BAM, LongTR alone | 8 CPU / 32G / 6h |
 | `13_test_new_bam_full.sbatch` | full three-tool run on that same BAM | 16 CPU / 64G / 36h |
 
-`inspect_bam.sh` is not a SLURM script: see "Testing a newly received BAM"
-below.
+`inspect_bam.sh`, `find_tools.sh` and `run_local.sh` are not SLURM scripts: see
+"Testing a newly received BAM", "Finding the tools on a new machine" and
+"Running without SLURM" below.
 
 ## Germline instability: duo definition
 
@@ -147,6 +153,224 @@ and the symlink is indexed instead.
 Indexing a BAM and extracting a FASTQ from it belong to no single tool, so
 samtools for those steps comes from the `samtools_env` key in `config.yaml`, or
 from the current `PATH` when that key is absent.
+
+## Producing something a collaborator can read
+
+A finished `detect` leaves a merged VCF of about two million rows whose
+per-tool sizes are in three different units. It is not a report, and `compare`
+cannot turn it into one yet, because `compare` answers "larger than in the
+controls" and needs the registry that `build-controls` produces from a control
+cohort.
+
+`extract_loci_report.py` produces the one thing that is defensible from a single
+sample: what each tool measured at a named set of genes.
+
+```bash
+./scripts/extract_loci_report.py \
+  --merged-vcf results/local/1312_DFT/1312_DFT.merged.vcf \
+  --genes-bed genes.bed.gz \
+  --genes-file scripts/disease_genes_str.txt \
+  --flank 5000 \
+  -o 1312_DFT_report.tsv
+```
+
+`scripts/disease_genes_str.txt` lists 47 genes carrying a disease-associated
+repeat, as a starting point rather than a curated clinical panel. Only gene
+names are in it on purpose: repeat coordinates and pathogenic thresholds differ
+between reference builds and between sources, so the coordinates come from the
+genes BED and the thresholds stay the clinician's call.
+
+The report carries a comment block stating that no locus is called expanded,
+and gives both the raw value per tool and a `*_motif_units` conversion so the
+columns can be read side by side:
+
+| Tool | Raw unit | Converts how |
+|---|---|---|
+| VAMOS | motif-repeat units, per haplotype | already in motif units |
+| LongTR | bp **difference** from the reference allele | divided by motif length, stays a difference |
+| tandem-genotypes | bp from read-level clustering | divided by motif length |
+| TRGT | absolute allele length in bp | divided by motif length |
+
+`--min-tools` restricts to loci several tools agree on, and
+`largest_motif_units_any_tool` sorts the table. That column mixes an absolute
+size with a difference, so it ranks candidates and measures nothing.
+
+## Finding the tools on a new machine
+
+The environment names in `config.example.yaml` (`clair3`, `whatshap-env`,
+`vamos`, `longtr`, `last_env`, `tandem-env`) are the ones from the machine this
+project was developed on. Elsewhere they are named differently, or a tool is
+installed outside any environment, and the preflight then reports a binary as
+missing when it is only somewhere else.
+
+```bash
+./scripts/find_tools.sh
+```
+
+It lists the environments the runner knows about, says which one provides each
+binary the pipeline needs, and prints the `config.yaml` environment block that
+matches. Paste that block in, then rerun `run_local.sh --preflight`.
+
+Two details in how it chooses:
+
+- Between several environments holding the same binary it prefers the one named
+  after it, since that is normally the environment installed for the tool rather
+  than one that merely has it as a dependency. `whatshap` present in `clair3`,
+  `nanocaller` and `whatshap` gives `whatshap`.
+- For samtools and minimap2 it prefers the `PATH` and leaves the key out, since
+  those are usually system installs and pinning them to an unrelated
+  environment hides which version is really running.
+
+A note on the preflight's own check, which is stricter than it looks. A conda
+environment keeps the system directories on `PATH`, so `command -v samtools`
+from inside an environment also finds `/usr/bin/samtools` and would report the
+environment as providing a tool it does not contain. The preflight therefore
+compares the resolved path against `CONDA_PREFIX` and distinguishes three
+outcomes: `[ok]` for a binary inside the environment, `[!]` for one that
+resolves outside it and will run but with whatever version the machine has, and
+`[!!]` for one that is not found at all.
+
+A missing binary does not necessarily block the run, since each tool needs only
+its own:
+
+| Running | Binaries needed |
+|---|---|
+| LongTR alone | `LongTR`, `minimap2`, `samtools` |
+| tandem-genotypes alone | `lastal`, `last-train`, `last-split`, `tandem-genotypes`, `samtools` |
+| VAMOS alone | `run_clair3.sh`, `whatshap`, `vamos`, `samtools` |
+| TRGT (opt-in) | `trgt`, `minimap2`, `samtools` |
+
+## Running without SLURM
+
+Every `.sbatch` script reads `SLURM_CPUS_PER_TASK` and `SLURM_SUBMIT_DIR`, so
+none of them works outside a cluster. `run_local.sh` does the same work with
+plain shell on a single machine.
+
+```bash
+./scripts/run_local.sh --sample 1312_DFT --bam /path/sample.bam --background
+```
+
+It sizes the thread count from the machine (all cores minus one, capped at 16),
+checks the inputs, the catalogs named in `config.yaml` and each micromamba
+environment before starting anything slow, then runs under `setsid nohup` so the
+run survives the terminal closing. `nice` and `ionice` keep a shared machine
+usable while it runs.
+
+| Option | Effect |
+|---|---|
+| `--sample ID` | sample identifier, required |
+| `--bam FILE` | aligned, coordinate-sorted BAM |
+| `--fastq FILE` | reads, preferred over extracting them from the BAM |
+| `--config FILE` | default `config.yaml` |
+| `--tools "A B"` | subset of tools, quoted |
+| `--regions FILE` | reduced LongTR catalog, written into a config copy |
+| `--threads N` | override the automatic count |
+| `--outdir DIR` | default `results/local` |
+| `--realign` | realign from the FASTQ rather than reusing the BAM |
+| `--background` | detach and return immediately |
+| `--status` | report which outputs exist and whether a run is active |
+| `--preflight` | run the checks only |
+| `--dry-run` | print the command that would run |
+
+Recommended order on a machine without SLURM, which matters more there than on a
+cluster because there is no queue to absorb a mistake:
+
+```bash
+# 1. check the environment before spending any time on it
+./scripts/run_local.sh --sample 1312_DFT --bam /path/sample.bam --preflight
+
+# 2. LongTR on a reduced catalog, minutes rather than hours
+awk '$1=="chr9"' /path/longtr.regions.bed > quick_chr9.bed
+./scripts/run_local.sh --sample 1312_DFT --bam /path/sample.bam \
+  --tools longtr --regions quick_chr9.bed
+
+# 3. LongTR on the full catalog, in the background
+./scripts/run_local.sh --sample 1312_DFT --bam /path/sample.bam \
+  --tools longtr --background
+
+# 4. the slow tools, one at a time so a failure is easy to attribute
+./scripts/run_local.sh --sample 1312_DFT --bam /path/sample.bam \
+  --tools vamos --background
+./scripts/run_local.sh --sample 1312_DFT --bam /path/sample.bam \
+  --tools tandem-genotypes --background
+
+# 5. once every tool has run, the same command with no --tools merges them
+./scripts/run_local.sh --sample 1312_DFT --bam /path/sample.bam --background
+```
+
+### Memory, and why a killed stage used to go unnoticed
+
+`lastal` memory grows with the thread count and with how much query sequence it
+holds at once. At the defaults, on a whole-genome ONT sample, it has exhausted
+RAM and swap and taken a machine down. Two config keys bound it:
+`tandem_genotypes.last_threads` and `tandem_genotypes.lastal_batch_size`, the
+latter mapping to `lastal -i`. On a 64 GB machine, `last_threads: 8` with
+`lastal_batch_size: 1G` is a reasonable starting point.
+
+Until this was fixed, such a kill was worse than a crash. The tool pipelines run
+through `bash -c`, and without `pipefail` bash reports only the exit status of
+the last command: a killed `lastal` in `lastal ... | last-split -m1 > out.maf`
+left `last-split` exiting 0 on its short input, so the step looked successful
+with a truncated MAF, tandem-genotypes built a TSV from partial alignments, and
+the idempotence check then treated that TSV as finished for good. Every pipeline
+now runs under `set -o pipefail`, and every produced file is written under a
+temporary name and renamed only on a clean exit, so a truncated output can never
+be mistaken for a finished step.
+
+A run made before this fix is not automatically suspect. Check the log for
+`exit code 0` and the MAF for a complete final alignment block, and compare the
+last query name in the MAF against the last reads of the FASTQ: if lastal
+consumed the whole input, the results stand. Only a run whose log shows a
+non-zero exit, or a MAF ending mid-line, needs the MAF and the TSV deleted and
+that step rerun.
+
+### Reclaiming space after a finished run
+
+A whole-genome run leaves roughly 330 GB behind for about 35 GB of actual
+results. Once the outputs that matter are present, the intermediates can go:
+
+| Keep | Why |
+|---|---|
+| `*_assembly.hap1.vcf`, `*_assembly.hap2.vcf` | VAMOS calls |
+| `*.longtr.vcf.gz` | LongTR calls |
+| `*.tandem_genotypes.tsv` | tandem-genotypes calls |
+| `*.merged.vcf` | the merged locus set |
+| `phased_merge_output.vcf.gz*` | the phasing, if VAMOS may be rerun |
+
+| Delete | Size on a 95 GB BAM |
+|---|---|
+| `*_alignments.maf` | ~116 GB, only an input to the TSV |
+| `*.reads.fastq.gz` | ~55 GB, re-extractable from the BAM |
+| `*_haplotagged.bam`, `*_h1.bam`, `*_h2.bam` and their indexes | ~160 GB, only inputs to the haplotype VCFs |
+| `tmp/`, `log/` | clair3 working files |
+
+Deleting those is safe: each tool short circuits on its own final output, so a
+later rerun of the same sample skips straight past the missing intermediates
+rather than rebuilding them. The per-read analyses (`somatic-instability`) read
+the LongTR VCF and the tandem-genotypes TSV, not the BAMs, so they are
+unaffected.
+
+### Disk space, which the preflight refuses to guess about
+
+LAST writes its MAF as plain text carrying both aligned sequences, so for a
+whole-genome ONT sample it commonly lands between 1.5 and 3 times the size of
+the input BAM, and the whole file has to exist before tandem-genotypes reads it.
+The preflight sizes this from the BAM and fails the run rather than letting it
+die partway through `lastal` after hours of work. A 95 GB BAM needs roughly
+190 to 330 GB free, counting the extracted FASTQ.
+
+Three ways out when the estimate does not fit: point `--outdir` at a larger
+filesystem, run the other tools locally and tandem-genotypes on the cluster, or
+subsample the reads for a pipeline test rather than for publishable numbers. The
+estimate is skipped when tandem-genotypes is not in `--tools`, so a LongTR or
+VAMOS run is never blocked by it.
+
+Follow a run with `--status`, or `tail -f logs/local_<sample>.log`. A second
+launch for a sample already running is refused rather than allowed to collide.
+
+Only one sample at a time per output directory. Two concurrent runs of the same
+sample would fight over the same files, and the pid file guard only catches
+those started through this script.
 
 ## Preparing the LongTR regions catalog
 

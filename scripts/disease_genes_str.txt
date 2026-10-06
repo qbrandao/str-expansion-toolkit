@@ -1,0 +1,77 @@
+# Genes carrying a tandem repeat whose expansion is associated with disease.
+#
+# A starting point for extract_loci_report.py, NOT a curated clinical panel.
+# Review it against a current source and against the referring clinician's
+# question before reporting anything from it. Names follow HGNC; the script
+# matches them case insensitively, since annotation files disagree on the case
+# of names such as C9orf72.
+#
+# Only gene names are listed here on purpose. Repeat coordinates and
+# pathogenic thresholds are not: they differ between reference builds and
+# between sources, and getting one wrong by a few base pairs silently points
+# the report at the wrong repeat. The coordinates come from the genes BED
+# passed on the command line, and the thresholds are the clinician's call.
+#
+# Usage:
+#   ./scripts/extract_loci_report.py --merged-vcf <sample>.merged.vcf \
+#       --genes-bed genes.bed.gz --genes-file scripts/disease_genes_str.txt \
+#       -o <sample>_report.tsv
+
+# --- polyglutamine ataxias and Huntington disease ---------------------
+HTT          # Huntington disease, CAG
+ATXN1        # SCA1, CAG
+ATXN2        # SCA2, CAG, also an ALS risk factor
+ATXN3        # SCA3 / Machado-Joseph, CAG
+ATXN7        # SCA7, CAG
+CACNA1A      # SCA6, CAG
+TBP          # SCA17, CAG
+ATN1         # DRPLA, CAG
+PPP2R2B      # SCA12, CAG
+AR           # spinal and bulbar muscular atrophy, CAG
+
+# --- non-coding ataxias and related -----------------------------------
+ATXN8OS      # SCA8, CTG
+ATXN10       # SCA10, ATTCT
+NOP56        # SCA36, GGCCTG
+BEAN1        # SCA31, TGGAA
+DAB1         # SCA37, ATTTC
+FXN          # Friedreich ataxia, GAA
+RFC1         # CANVAS, AAGGG and related motifs
+THAP11       # SCA51, CGG
+
+# --- myotonic dystrophies and myopathies ------------------------------
+DMPK         # DM1, CTG
+CNBP         # DM2, CCTG (also known as ZNF9)
+PABPN1       # oculopharyngeal muscular dystrophy, GCN
+LRP12        # oculopharyngeal myopathy with leukoencephalopathy, CGG
+GIPC1        # oculopharyngodistal myopathy, CGG
+NOTCH2NLC    # neuronal intranuclear inclusion disease, GGC
+ABCD3        # oculopharyngodistal myopathy, CGG
+
+# --- ALS, FTD, epilepsies ---------------------------------------------
+C9orf72      # ALS and frontotemporal dementia, GGGGCC
+CSTB         # progressive myoclonic epilepsy type 1, CCCCGCCCCGCG
+SAMD12       # familial adult myoclonic epilepsy 1, TTTCA and TTTTA
+STARD7       # familial adult myoclonic epilepsy 2
+MARCHF6      # familial adult myoclonic epilepsy 3
+YEATS2       # familial adult myoclonic epilepsy 4
+TNRC6A       # familial adult myoclonic epilepsy 6
+RAPGEF2      # familial adult myoclonic epilepsy 7
+
+# --- X-linked intellectual disability and fragile sites ---------------
+FMR1         # fragile X syndrome and FXTAS, CGG
+AFF2         # FRAXE intellectual disability, CCG
+DIP2B        # FRA12A, CGG
+XYLT1        # Baratela-Scott syndrome, GGC
+
+# --- polyalanine and other coding repeats -----------------------------
+ARX          # X-linked lissencephaly and intellectual disability, GCG
+FOXL2        # blepharophimosis syndrome, CCG
+HOXD13       # synpolydactyly, GCG
+PHOX2B       # congenital central hypoventilation, GCN
+RUNX2        # cleidocranial dysplasia, GCG
+SOX3         # X-linked hypopituitarism, GCN
+ZIC2         # holoprosencephaly, GCN
+EIF4A3       # Richieri-Costa-Pereira syndrome, repeat in the 5' region
+GLS          # glutaminase deficiency, GCA
+PRDM12       # hereditary sensory and autonomic neuropathy type 8, GCC

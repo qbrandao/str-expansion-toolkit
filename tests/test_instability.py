@@ -341,3 +341,71 @@ def test_parse_longtr_for_somatic_c9orf72_real_data(tmp_path):
     assert metrics["total_reads"] == 11  # matches INFO/DP=11 on the real line
     assert metrics["is_mosaic"] is False
     assert metrics["off_allele_reads"] == 0
+
+
+# ---------------------------------------------------------------------
+# The window options must reach the computation by keyword. They sit before
+# min_off_allele_reads and exclude_sex_chromosomes in the signatures, so a
+# positional call would silently feed the wrong value into the wrong slot.
+# ---------------------------------------------------------------------
+
+def test_run_somatic_passes_every_option_by_keyword(monkeypatch, tmp_path):
+    import pandas as pd
+    from str_toolkit import instability as inst
+
+    captured = {}
+
+    def fake_compute(detect_dir, sample_ids, genes_bed, exons_bed, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame([{"x": 1}])
+
+    monkeypatch.setattr(inst, "compute_somatic_instability", fake_compute)
+    monkeypatch.setattr(inst, "read_tsv_dicts", lambda *a, **k: [{"sample_id": "s1"}])
+
+    class Args:
+        detect_dir = tmp_path
+        samples_list = "s.tsv"
+        genes_bed = "g.bed.gz"
+        exons_bed = "e.bed.gz"
+        promoter_bp = 1500
+        subtelomere_bp = 250_000
+        min_off_allele_reads = 7
+        output = str(tmp_path / "out.tsv")
+        summary = None
+        format = "tsv"
+
+    assert inst.run_somatic(Args()) == 0
+    assert captured["promoter_bp"] == 1500
+    assert captured["subtelomere_bp"] == 250_000
+    assert captured["min_off_allele_reads"] == 7
+
+
+def test_run_meiotic_passes_every_option_by_keyword(monkeypatch, tmp_path):
+    import pandas as pd
+    from str_toolkit import instability as inst
+
+    captured = {}
+
+    def fake_compute(data_dir, duos, genes_bed, exons_bed, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame([{"x": 1}])
+
+    monkeypatch.setattr(inst, "compute_meiotic_instability", fake_compute)
+    monkeypatch.setattr(inst, "read_duos", lambda *a, **k: [])
+
+    class Args:
+        data_dir = tmp_path
+        duos = "d.tsv"
+        genes_bed = "g.bed.gz"
+        exons_bed = "e.bed.gz"
+        promoter_bp = 1000
+        subtelomere_bp = 400_000
+        include_sex_chromosomes = False
+        output = str(tmp_path / "out.tsv")
+        summary = None
+        format = "tsv"
+
+    assert inst.run_meiotic(Args()) == 0
+    assert captured["promoter_bp"] == 1000
+    assert captured["subtelomere_bp"] == 400_000
+    assert captured["exclude_sex_chromosomes"] is True

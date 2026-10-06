@@ -16,27 +16,73 @@ reference: /home/user/scripts/GRCh38-GIABv3_std.fa
 # Comment this out to take samtools from the current PATH instead.
 samtools_env: vamos
 
+# Optional: how the tool environments below are entered. One of micromamba,
+# mamba or conda, or a full path to one of them (e.g.
+# /home/user/anaconda3/bin/conda). Commented out, the first of the three
+# found on PATH is used. conda is run with --no-capture-output so that a
+# long tool's progress is not buffered away.
+# env_runner: micromamba
+
+# Optional: environment providing minimap2 AND samtools for the shared
+# alignment step, which only runs when no BAM is given or when --realign is
+# used. Commented out, the environment of the tool that asked for the
+# alignment is used (longtr or trgt), which then has to contain minimap2.
+# align_env: bioinfo
+
+# Each tool section names the environment its binaries live in, and may also
+# name the binary itself. A bare binary name is resolved inside the
+# environment, which is the usual case and the default. An absolute path is
+# invoked as is, which is what a tool compiled by hand outside any
+# environment needs: vamos and LongTR are often built that way. With an
+# absolute path the env key can be set to "" and the binary then runs on the
+# current PATH, or the env can be kept so its shared libraries stay
+# available. Run ./scripts/find_tools.sh to see what this machine has.
+
 vamos:
   env_clair3: clair3
   env_whatshap: whatshap-env
   env_vamos: vamos
+  # bin_clair3: run_clair3.sh
+  # bin_whatshap: whatshap
+  # bin_vamos: /home/user/vamos/src/vamos
   model_prefix: /home/user/scripts/r1041_e82_400bps_sup_v500
   catalog: /home/user/scripts/vamos.motif.hg38.v2.1.e0.1.tsv
 
 trgt:
   env: trgt
+  # bin: trgt
   mmi: /home/user/scripts/GRCh38-GIABv3_std_lrhq.mmi
   repeats_bed: /home/user/scripts/trgt.motifsTR.bed
 
 tandem_genotypes:
   env_last: last_env
   env_tandem: tandem-env
+  # LAST memory grows with the thread count and with how much query sequence
+  # is held in memory at once. On a whole ONT genome the defaults have
+  # exhausted RAM and swap and brought a machine down, so bound both here.
+  #
+  # last_threads: lastal and last-train thread count, independent of
+  #   --threads. 0 inherits --threads. Halving it roughly halves peak memory.
+  # lastal_batch_size: maps to lastal -i, the main bound. "1G" keeps each
+  #   batch of query sequence to about a gigabyte.
+  #
+  # As a starting point on a 64 GB machine with a whole-genome ONT sample:
+  #   last_threads: 8
+  #   lastal_batch_size: 1G
+  # last_threads: 0
+  # lastal_batch_size: ""
+  # lastal_extra_args: ""
+  # bin_lastal: lastal
+  # bin_last_train: last-train
+  # bin_last_split: last-split
+  # bin_tandem_genotypes: tandem-genotypes
   # Prefix of a LAST index already built with `lastdb` (the "ref" in the bash script)
   last_ref_db: /home/user/scripts/ref
   repeats_bed: /home/user/scripts/repeats.trf.bed
 
 longtr:
   env: longtr
+  # bin: LongTR
   # minimap2 index -- can be the same file as trgt.mmi (same reference
   # genome); the alignment is automatically reused if both tools run in
   # the same job.

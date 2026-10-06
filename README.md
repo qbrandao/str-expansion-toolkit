@@ -38,10 +38,40 @@ cp config.example.yaml config.yaml
 # edit config.yaml with your own paths
 ```
 
-The optional `samtools_env` key names the environment providing samtools for
-the two steps that belong to no single tool: indexing an input BAM that has no
-index, and extracting a FASTQ from a BAM when none is supplied. Left out,
-samtools is taken from the current `PATH`.
+Two optional keys cover how the machine is set up:
+
+- `samtools_env` names the environment providing samtools for the two steps that
+  belong to no single tool: indexing an input BAM that has no index, and
+  extracting a FASTQ from a BAM when none is supplied. Left out, samtools is
+  taken from the current `PATH`.
+- `env_runner` is how the tool environments are entered: `micromamba`, `mamba`,
+  `conda`, or a full path to one of them such as
+  `/home/user/anaconda3/bin/conda`. Left out, the first of the three found on
+  `PATH` is used. conda is called with `--no-capture-output`, since it otherwise
+  buffers a long tool's progress away.
+- `align_env` provides minimap2 and samtools for the shared alignment step,
+  which only runs when no BAM is given or with `--realign`. Left out, the
+  environment of the tool that asked for the alignment is used, which then has
+  to contain minimap2 itself.
+
+Each tool section also accepts the binary itself, as `bin`, `bin_vamos`,
+`bin_clair3`, `bin_whatshap`, `bin_lastal` and so on. A bare name is resolved
+inside the environment, which is the default. An absolute path is invoked as is,
+which is what a tool compiled by hand outside any environment needs, vamos and
+LongTR being commonly built that way:
+
+```yaml
+vamos:
+  env_vamos: ""                                # no environment
+  bin_vamos: /home/user/vamos/src/vamos        # hand-built
+```
+
+Setting the env to `""` runs the binary on the current `PATH`. Keeping the env
+name alongside an absolute path also works, and is worth doing when the binary
+needs that environment's shared libraries.
+
+`scripts/find_tools.sh` works all of this out for a given machine, including
+searching for hand-built binaries, and prints the block to paste in.
 
 ## Usage
 
@@ -327,6 +357,19 @@ the merge step (`--window`, 25 bp by default), since the truthset does not
 share the coordinate convention of any single caller. Motifs are compared
 after canonicalization; if the truthset carries no usable motif field the
 matching falls back to position only and logs a warning.
+
+## Running without SLURM
+
+`scripts/run_local.sh` runs `detect` on a single machine with no scheduler,
+under `nohup`, with a preflight of the environments and catalogs and a
+`--status` view of progress. See `scripts/README.md`, section "Running without
+SLURM".
+
+```bash
+./scripts/run_local.sh --sample 1312_DFT --bam /path/sample.bam --preflight
+./scripts/run_local.sh --sample 1312_DFT --bam /path/sample.bam --background
+./scripts/run_local.sh --sample 1312_DFT --status
+```
 
 ## Sample file format
 
