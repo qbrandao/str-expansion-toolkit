@@ -12,3 +12,9 @@ venv/
 *.json
 config.yaml
 .DS_Store
+logs/
+results/
+measured/
+measured_depth.tsv
+downsample_plan.tsv
+controls_disk_audit.tsv

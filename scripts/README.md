@@ -17,6 +17,10 @@ chain everything at once with `./scripts/submit_full_pipeline.sh`.
   (see "Germline instability" below)
 - `all_samples.tsv`: TSV with at least a `sample_id` column, for somatic
   instability across the whole cohort
+- `controls_samples.txt`: one control identifier per line, no header, which
+  drives the `--array` range of scripts 14 and 15
+- `downsample_plan.tsv`: produced by `scripts/make_downsample_plan.py`, read by
+  script 15
 - `genes.bed.gz`, `MANE_Select_exons.bed.gz`: used by `compare`,
   `repertoire` and both instability analyses
 - `longtr.regions_bed` (config.yaml): see `./scripts/prepare_longtr_bed.sh`
@@ -43,10 +47,16 @@ chain everything at once with `./scripts/submit_full_pipeline.sh`.
 | `11_validate_truthset.sbatch` | comparison against the Platinum Pedigree TR truthset | 4 CPU / 16G / 2h |
 | `12_test_new_bam_longtr.sbatch` | fast check of a newly received BAM, LongTR alone | 8 CPU / 32G / 6h |
 | `13_test_new_bam_full.sbatch` | full three-tool run on that same BAM | 16 CPU / 64G / 36h |
+| `14_measure_depth.sbatch` | exact depth and read N50 of every control | 6 CPU / 8G / 8h, xN |
+| `15_merge_align_controls.sbatch` | merge run BAMs, subsample, align | 16 CPU / 64G / 48h, xN |
 
 `inspect_bam.sh`, `find_tools.sh` and `run_local.sh` are not SLURM scripts: see
 "Testing a newly received BAM", "Finding the tools on a new machine" and
 "Running without SLURM" below.
+
+`audit_controls.sh`, `show_outliers.sh`, `measure_bam_lengths.sh` and
+`make_downsample_plan.py` are not SLURM scripts either: see "Preparing the
+control panel" below.
 
 ## Germline instability: duo definition
 
@@ -73,6 +83,7 @@ independent observations would be pseudo-replication.
 
 ## Recommended order (first run, step by step)
 
+0. "Preparing the control panel" below, if the controls are raw downloads
 1. `00_unit_tests.sbatch` — validates the package installation
 2. `01_smoke_test_single_tool.sbatch` — validates `config.yaml`/paths (fast)
 3. `02_detect_single_patient.sbatch` — validates the full pipeline on 1 patient
@@ -153,6 +164,121 @@ and the symlink is indexed instead.
 Indexing a BAM and extracting a FASTQ from it belong to no single tool, so
 samtools for those steps comes from the `samtools_env` key in `config.yaml`, or
 from the current `PATH` when that key is absent.
+
+## Preparing the control panel
+
+A control panel assembled from public long-read releases is not homogeneous on
+arrival, and the heterogeneity is invisible in the sample identifiers. Four
+steps turn a directory of downloads into a panel that can be compared against
+patients, and each one exists because the naive version of it failed on real
+data.
+
+### 1. Inventory what is actually on disk
+
+```bash
+./scripts/audit_controls.sh /path/to/controls controls_samples.txt
+./scripts/show_outliers.sh controls_disk_audit.tsv /path/to/controls
+```
+
+Read only. The audit writes one row per sample with the pore chemistry, the
+basecaller, the basecalling model, the number of run BAMs and the total size,
+and flags anything inconsistent. Passing the identifier list rather than
+letting it walk the directory is what makes a missing download visible, as
+`MISSING_DIR`, instead of silently absent from the panel.
+
+The flags that matter, in decreasing order of consequence:
+
+| Flag | Why it blocks |
+|---|---|
+| `MIXED_MODEL` | two basecalling models in one sample, so merging would put two error profiles in one BAM |
+| `R9_PRESENT`, `GUPPY_R9_ERA` | R9.4.1 has roughly twice the indel rate of R10.4.1 in repetitive sequence |
+| `NO_CHEM_TOKEN` | the filename follows another convention, so the sample comes from another source |
+| `MIXED_CHEMISTRY` | as `MIXED_MODEL`, and worse |
+| `NOT_SUP` | a hac or fast model, which is not comparable to a sup one |
+| `MIXED_BASECALLER` | harmless when the model is identical, since the dorado version changes the runtime and not the weights |
+
+`NO_CHEM_TOKEN` is the one worth chasing by hand. On this panel it caught three
+samples named `<ID>-ONT-hg38-R10-LSK114-dorado090_sup_5mCG_5hmCG_v500.phased.bam`,
+which are from the 1000 Genomes long-read consortium rather than the HPRC, are
+already aligned and phased, and above all use the LSK114 ligation kit instead
+of the ULK114 ultra-long kit. That is the difference between a read N50 near
+40 kb and one near 90 kb, and read length is what decides whether a read spans
+a long expansion at all. They were excluded.
+
+### 2. Measure depth and read length, do not infer them
+
+```bash
+sbatch scripts/14_measure_depth.sbatch
+{ head -1 measured/*.tsv | head -1; tail -q -n +2 measured/*.tsv; } \
+  | sort -u > measured_depth.tsv
+```
+
+A published depth from a release index describes the files of that release, not
+the files that were downloaded, and the two diverge as soon as the release is
+superseded. Fitting depth against file size using published depths as the
+training signal was tried here and produced a negative R squared, with a worst
+case error of 81 percent, which is why that approach was abandoned rather than
+tuned.
+
+Measuring is one streaming pass over the raw BAMs, a few hundred CPU hours for
+a hundred-sample panel, negligible against genotyping. It yields the depth that
+the subsampling plan needs and the read N50 that decides comparability, in the
+same pass.
+
+The same script runs on any single BAM, which is how a patient is measured for
+comparison:
+
+```bash
+THREADS=8 ./scripts/measure_bam_lengths.sh patient.tsv SAMPLE_ID /path/to/patient.bam
+```
+
+### 3. Bring the panel to one depth
+
+```bash
+python3 scripts/make_downsample_plan.py measured_depth.tsv \
+        --target <patient_depth> --drop SAMPLE_A,SAMPLE_B
+```
+
+Equalising depth is a requirement rather than an optimisation. The somatic
+analysis calls a locus mosaic on a minimum number of reads supporting an off
+allele, and that threshold does not mean the same thing at 70x as at 20x, so a
+panel left at native depth would report a difference in coverage as a
+difference in instability. The control registry is depth dependent in the same
+direction, since a deeper control has more opportunity to observe the long
+allele that sets the maximum.
+
+The saving is a side effect, and it is large: subsampling happens before
+alignment in script 15, so the discarded reads are never aligned and the LAST
+stage, which accounts for about 86 percent of the per-sample runtime, sees only
+the retained reads.
+
+The planner refuses to invent anything. Samples below the target cannot reach
+it by subsampling, so it reports them and leaves the choice between lowering
+the target with `--target-from-min` and dropping them.
+
+What subsampling cannot fix is read length, because removing reads at random
+preserves the length distribution. If the patients and the controls differ in
+N50, that asymmetry has to be stated. It costs sensitivity rather than
+specificity, since the controls then observe long alleles the patients cannot
+span, but it belongs in the methods either way.
+
+### 4. Merge, subsample and align in one pass
+
+```bash
+sbatch scripts/15_merge_align_controls.sbatch
+```
+
+A single HPRC sample commonly arrives as two to seven run BAMs, one per
+flowcell. They are concatenated into one read stream and aligned once, rather
+than aligned run by run and merged afterwards, which would pay for one
+coordinate sort per run. No intermediate FASTQ is written, which saves both the
+space and a full read and write of it, and methylation tags survive the round
+trip through `samtools fastq -T` and `minimap2 -y`.
+
+The script refuses to run a sample that has no row in the plan, rather than
+falling back to the native depth. A single control left at full depth would be
+the deepest in the panel and would bias every depth dependent statistic
+computed from it, and a silent fall back is exactly how that happens.
 
 ## Two annotation windows that are scientific choices
 

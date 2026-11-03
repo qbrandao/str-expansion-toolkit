@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "str-expansion-toolkit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Détection, comparaison et rapport d'expansions de répétitions courtes (STR) à partir de VAMOS, TRGT et tandem-genotypes."
 readme = "README.md"
 requires-python = ">=3.9"

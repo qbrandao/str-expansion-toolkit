@@ -32,7 +32,7 @@ copies the sources into `site-packages`, where a later `git pull` never reaches
 them.
 
 ```
-str-expansion-toolkit 0.1.0
+str-expansion-toolkit 0.2.0
 module      : /home/user/str-expansion-toolkit/src/str_toolkit/__init__.py
 interpreter : /home/user/anaconda3/envs/x/bin/python
 install     : editable (reads the repo sources)
