@@ -16,7 +16,8 @@ Usage
 """
 import argparse, csv, statistics, sys
 
-NEEDED = ("label", "depth_x", "read_n50", "depth_over_100kb")
+NEEDED = ("label", "depth_x", "read_n50")
+SPAN_SIZES = (1000, 2000, 5000, 10000, 20000, 50000)
 
 
 def main():
@@ -26,6 +27,15 @@ def main():
                     help="target depth in x, normally the patient cohort depth")
     ap.add_argument("--target-from-min", action="store_true",
                     help="use the shallowest sample in the panel as the target")
+    ap.add_argument("--target-spanning", type=float, default=None,
+                    help="target the expected number of reads spanning a locus of "
+                         "--at-locus-bp instead of the raw depth. This is the better "
+                         "target: two samples at the same raw depth can differ several "
+                         "fold in spanning reads, because spanning depth depends on read "
+                         "length as well as on depth.")
+    ap.add_argument("--at-locus-bp", type=int, default=1000,
+                    choices=SPAN_SIZES,
+                    help="locus size at which --target-spanning applies")
     ap.add_argument("--out", default="downsample_plan.tsv")
     ap.add_argument("--drop", default="",
                     help="comma separated sample ids to exclude from the panel")
@@ -64,35 +74,66 @@ def main():
     print(f"  read N50 median {statistics.median(n50s)/1000:7.1f} kb  "
           f"min {min(n50s)/1000:6.1f}   max {max(n50s)/1000:6.1f}")
 
-    if a.target_from_min:
+    given = sum(x is not None and x is not False
+                for x in (a.target, a.target_spanning, a.target_from_min or None))
+    if given != 1:
+        sys.exit("give exactly one of --target, --target-spanning or --target-from-min")
+
+    span_col = f"span_{a.at_locus_bp // 1000}kb"
+    basis = "depth_x"
+    if a.target_spanning is not None:
+        if span_col not in rows[0]:
+            sys.exit(f"the measured table lacks the column {span_col}. Re-run the "
+                     "measurement with the current scripts/measure_bam_lengths.sh, "
+                     "which emits the spanning profile in the same pass.")
+        basis = span_col
+        target = a.target_spanning
+        vals = []
+        for sid, _, r in panel:
+            try:
+                v = float(r[span_col])
+            except ValueError:
+                sys.exit(f"unreadable {span_col} for {sid}: {r[span_col]!r}")
+            if v <= 0:
+                sys.exit(f"non positive {span_col} for {sid}: {v}. That sample cannot "
+                         f"genotype a locus of {a.at_locus_bp} bp at all.")
+            vals.append(v)
+        print(f"  spanning reads at {a.at_locus_bp} bp, median "
+              f"{statistics.median(vals):7.1f}   min {min(vals):6.1f}   max {max(vals):6.1f}")
+        print(f"\ntarget: {target:.2f} reads spanning a {a.at_locus_bp} bp locus")
+        print("  Equalising this rather than the raw depth is what makes the panel "
+              "comparable,\n  but note it cannot equalise spanning depth at every locus "
+              "size at once, since\n  the read length distributions differ.")
+    elif a.target_from_min:
         target = min(depths)
         print(f"\ntarget taken from the shallowest sample: {target:.1f}x")
-    elif a.target is not None:
+    else:
         target = a.target
         print(f"\ntarget given: {target:.1f}x")
-    else:
-        sys.exit("give --target or --target-from-min")
 
-    below = [(s, d) for s, d, _ in panel if d < target * 0.98]
+    def value_of(r):
+        return float(r[basis])
+
+    below = [(s, value_of(r)) for s, _, r in panel if value_of(r) < target * 0.98]
     if below:
         print(f"\n{len(below)} samples sit below the target and cannot reach it by subsampling.")
         for s, d in sorted(below, key=lambda t: t[1])[:12]:
-            print(f"    {s:<9} {d:6.1f}x")
+            print(f"    {s:<9} {d:8.2f}")
         print("  They are kept whole, so the panel is not uniform at the target. Either lower")
         print("  the target to the minimum with --target-from-min, or drop these samples.")
 
     out, fracs = [], []
     for sid, d, r in sorted(panel):
-        f = min(1.0, target / d)
+        f = min(1.0, target / value_of(r))
         note = "ok" if f < 0.98 else "kept_whole_at_or_below_target"
         out.append([sid, f"{d:.3f}", f"{f:.4f}", r["read_n50"],
-                    r.get("depth_over_100kb", ""), note])
+                    r.get(span_col, ""), basis, f"{target:.4f}", note])
         fracs.append(f)
 
     with open(a.out, "w", newline="") as fh:
         w = csv.writer(fh, delimiter="\t")
         w.writerow(["sample_id", "measured_depth_x", "subsample_fraction",
-                    "read_n50", "depth_over_100kb", "note"])
+                    "read_n50", span_col, "target_basis", "target_value", "note"])
         w.writerows(out)
 
     kept = statistics.fmean(fracs)
@@ -103,6 +144,10 @@ def main():
           f"{kept*100:.0f}% of its native cost")
     print(f"  retained bases {sum(d*f for (_, d, _), f in zip(sorted(panel), fracs)):.0f}x "
           f"summed, against {sum(depths):.0f}x native")
+    if basis != "depth_x":
+        res = [float(r[span_col]) * f for (_, _, r), f in zip(sorted(panel), fracs)]
+        print(f"  spanning reads at {a.at_locus_bp} bp after subsampling: "
+              f"{min(res):.2f} to {max(res):.2f}, target {target:.2f}")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,12 @@
 # intermediate FASTQ is ever written. Methylation tags are carried as FASTQ
 # comments by samtools fastq -T and restored by minimap2 -y.
 #
+# The minimap2 invocation reproduces the one the patient BAMs were produced
+# with, down to the flags: -ax map-ont -y, with no -Y and no --MD. Matching it
+# matters more than any individual flag being preferable, because a difference
+# in how supplementary alignments store their sequence, or in which tags are
+# present, applies to one group and not the other.
+#
 # Subsampling happens before alignment, which is the whole point: the discarded
 # reads are never aligned, and the LAST stage downstream, which dominates the
 # runtime of the pipeline, sees only the retained reads. Random subsampling
@@ -43,7 +49,18 @@ cd "${SLURM_SUBMIT_DIR}"
 CONTROLS_ROOT="${CONTROLS_ROOT:-/store/brandaoq/controls}"
 SAMPLES="controls_samples.txt"
 PLAN="downsample_plan.tsv"
-REF_MMI="${REF_MMI:-/store/brandaoq/ref/GRCh38.mmi}"
+# The reference must be byte for byte the one the patients were aligned to,
+# including the accessory contig set. Coordinates agreeing on the primary
+# chromosomes is not enough: alts and decoys present on one side only divert
+# ambiguous reads, and repeat loci are exactly the ambiguous regions, so an
+# unequal contig set is a case control confounder.
+#
+# A FASTA is used directly rather than a prebuilt .mmi, because an index built
+# with a different -k or -w silently overrides the preset's values and the
+# alignment then differs from the patients' for no visible reason. Indexing
+# costs two or three minutes per job, which is nothing against the rest. Pass a
+# path ending in .mmi only if you built it with the matching preset.
+REF="${REF:-/home/brandaoq/scripts/GRCh38-GIABv3_std.fa}"
 SUBSAMPLE_SEED="${SUBSAMPLE_SEED:-42}"
 
 THREADS="${SLURM_CPUS_PER_TASK:-16}"
@@ -67,7 +84,7 @@ fi
 mapfile -t RUNS < <(find "${DIR}" -maxdepth 1 -type f -name '*.bam' \
                       ! -name "${SID}.sorted.bam" ! -name '.*' -printf '%p\n' | sort)
 [ "${#RUNS[@]}" -gt 0 ] || { echo "no run BAM in ${DIR}" >&2; exit 1; }
-[ -s "${REF_MMI}" ] || { echo "reference index not found: ${REF_MMI}" >&2; exit 1; }
+[ -s "${REF}" ] || { echo "reference not found: ${REF}" >&2; exit 1; }
 [ -s "${PLAN}" ]    || { echo "downsampling plan not found: ${PLAN}" >&2; exit 1; }
 
 # The fraction column is located by its header name rather than by position, so
@@ -105,7 +122,7 @@ trap cleanup EXIT
         | samtools fastq -@ 2 -T MM,ML -
     fi
   done
-} | minimap2 -ax map-ont -Y -y --MD -t "${THREADS}" "${REF_MMI}" - \
+} | minimap2 -ax map-ont -y -t "${THREADS}" "${REF}" - \
   | samtools sort -@ "${SORT_THREADS}" -m "${SORT_MEM}" -T "${TMPDIR_SORT}/s" -o "${TMP}" -
 
 samtools index -@ "${THREADS}" "${TMP}"

@@ -54,7 +54,8 @@ chain everything at once with `./scripts/submit_full_pipeline.sh`.
 "Testing a newly received BAM", "Finding the tools on a new machine" and
 "Running without SLURM" below.
 
-`audit_controls.sh`, `show_outliers.sh`, `measure_bam_lengths.sh` and
+`audit_controls.sh`, `show_outliers.sh`, `measure_bam_lengths.sh`,
+`spanning_profile.sh`, `bam_length_sanity.sh`, `compare_contigs.sh` and
 `make_downsample_plan.py` are not SLURM scripts either: see "Preparing the
 control panel" below.
 
@@ -199,11 +200,35 @@ The flags that matter, in decreasing order of consequence:
 
 `NO_CHEM_TOKEN` is the one worth chasing by hand. On this panel it caught three
 samples named `<ID>-ONT-hg38-R10-LSK114-dorado090_sup_5mCG_5hmCG_v500.phased.bam`,
-which are from the 1000 Genomes long-read consortium rather than the HPRC, are
-already aligned and phased, and above all use the LSK114 ligation kit instead
-of the ULK114 ultra-long kit. That is the difference between a read N50 near
-40 kb and one near 90 kb, and read length is what decides whether a read spans
-a long expansion at all. They were excluded.
+and following them up produced four independent reasons to exclude them: they
+come from the 1000 Genomes long-read consortium rather than the HPRC, they use
+the LSK114 ligation kit instead of the ULK114 ultra-long kit, the three are a
+trio and so are not independent, and `compare_contigs.sh` showed 194 contigs
+against the reference's 25. One flag was enough to start looking, and no single
+one of the four would have been visible from the identifiers.
+
+### The reference has to be the same one, contig for contig
+
+```bash
+./scripts/compare_contigs.sh REFERENCE.fa PATIENT.bam CONTROL.bam
+```
+
+Coordinates agreeing on the primary chromosomes is not enough. Alts and decoys
+present on one side only divert ambiguous reads, and repeat loci are exactly
+the ambiguous regions, so an unequal accessory contig set biases one group
+against the other at the loci under study. On this cohort the patients sit on a
+25 contig reference with no alts and no decoys, and the three excluded samples
+came on a 194 contig one.
+
+The alignment of the controls therefore reproduces the patients' minimap2
+invocation flag for flag, read from their `@PG` line, rather than using
+whichever flags are preferable in isolation. Here that means `-ax map-ont -y`,
+with no `-Y` and no `--MD`: a difference in whether supplementary alignments
+store their full sequence, or in which tags are present, would apply to one
+group only. `bam_length_sanity.sh` is what reads that `@PG` line, along with
+the record census and the check that each read name holds a single primary
+record, which is what distinguishes a genuinely short library from a
+fragmented one.
 
 ### 2. Measure depth and read length, do not infer them
 
@@ -232,12 +257,56 @@ comparison:
 THREADS=8 ./scripts/measure_bam_lengths.sh patient.tsv SAMPLE_ID /path/to/patient.bam
 ```
 
+### What read length N50 does not tell you
+
+A read genotypes a repeat only if it covers the motif plus an anchor on each
+side. For a locus of length W and an anchor f, a read of length L can be placed
+spanning it in L - W - 2f positions, so the expected number of spanning reads is
+that sum over all reads divided by the genome length. The measurement emits this
+profile in the same pass, as the `span_*` columns, and
+`./scripts/spanning_profile.sh BAM` prints it as a table for one sample.
+
+This is the quantity that sets the detection limit, and it is not a corollary of
+depth. On this cohort one patient at 32.9x with an N50 of 6.5 kb was compared
+against a control at 84.6x with an N50 of 87.9 kb:
+
+| locus size | patient spanning reads | control spanning reads | control at the patient depth |
+|---|---|---|---|
+| 1 kb | 16.2 | 77.9 | 30.3 |
+| 3 kb | 8.2 | 74.2 | 28.9 |
+| 5 kb | 3.7 | 70.9 | 27.6 |
+| 10 kb | 0.6 | 63.6 | 24.7 |
+| 20 kb | 0.05 | 52.0 | 20.2 |
+
+The patient holds ten spanning reads to 2.5 kb, falls to three by 5.8 kb and to
+one by 8.5 kb, while the control stays above ten past 100 kb. Two consequences
+follow. The patient cannot measure an expansion beyond a few kilobases at all,
+which produces false negatives rather than false positives, since an allele that
+cannot be spanned is called as reference or not called. And equalising the total
+depth does not fix it: at 10 kb a 43 fold gap in spanning reads survives the
+subsampling, because what differs is read length rather than depth.
+
+The honest treatment is to report the per sample ceiling from this profile, to
+annotate every call with the spanning depth at the called size, and to state the
+ceiling in the methods. Truncating the control reads to the patient N50 is not
+the answer, since it destroys the controls without making the large loci
+callable in the patient.
+
 ### 3. Bring the panel to one depth
 
 ```bash
 python3 scripts/make_downsample_plan.py measured_depth.tsv \
-        --target <patient_depth> --drop SAMPLE_A,SAMPLE_B
+        --target-spanning <patient_span_1kb> --at-locus-bp 1000 \
+        --drop SAMPLE_A,SAMPLE_B
 ```
+
+Target the spanning depth rather than the raw depth. Two samples at the same raw
+depth differ by about a factor of two in spanning reads at 1 kb when their read
+lengths differ as they do here, so raw depth parity leaves the controls better
+served than the patients at the very loci under study. Targeting spanning depth
+at a stated locus size removes that, and it subsamples harder, which cuts the
+LAST cost further. `--target` on the raw depth and `--target-from-min` remain
+available, and exactly one of the three must be given.
 
 Equalising depth is a requirement rather than an optimisation. The somatic
 analysis calls a locus mosaic on a minimum number of reads supporting an off
