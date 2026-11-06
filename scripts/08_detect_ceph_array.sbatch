@@ -5,9 +5,16 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --time=120:00:00
+# ^ As for the controls: the LAST alignment dominates, and a CEPH sample at
+#   its native depth needs more than 70 hours at 16 cores.
 #SBATCH --partition=<your_partition>
-#SBATCH --array=1-4%2
+#SBATCH --array=1-N%8
+# ^ Replace N with the number of data lines in ceph.tsv:
+#     tail -n +2 ceph.tsv | wc -l
+#   This was hard coded to 4, which silently processed only the first four
+#   members of the pedigree and left the rest out of every downstream
+#   analysis without any error.
 
 # Runs `detect` on the four CEPH 1463 quartet members used for the germline
 # instability analysis (paper Methods 2.7):
